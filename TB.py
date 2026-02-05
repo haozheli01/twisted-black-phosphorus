@@ -101,15 +101,15 @@ class TwistedBPModel:
         # # [CRITICAL FIX] Add complex phase to break Real-Hamiltonian symmetry
         # # This physically corresponds to a stacking shift r0.
         # # Without this, H is real => Berry Curvature is 0 => Shift Current is 0.
-        # delta_g = self.G_vectors[rows] - self.G_vectors[cols]
-        # r0 = np.array([0.1, 0.1]) * self.a_lat # Arbitrary shift approx 0.2 unit cells
-        # phase = np.exp(1j * np.dot(delta_g, r0))
+        delta_g = self.G_vectors[rows] - self.G_vectors[cols]
+        r0 = np.array([self.b_lat / 2, 0.0]) # Arbitrary shift approx 0.2 unit cells
+        phase = np.exp(1j * np.dot(delta_g, r0))
         
-        # H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V * phase
-        # H[cols * 4 + 3, rows * 4 + 1] = self.gamma_V * np.conj(phase)
+        H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V * phase
+        H[cols * 4 + 3, rows * 4 + 1] = self.gamma_V * np.conj(phase)
 
-        H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V
-        H[cols * 4 + 3, rows * 4 + 1] = self.gamma_V
+        # H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V
+        # H[cols * 4 + 3, rows * 4 + 1] = self.gamma_V
         
         return H
 
