@@ -753,116 +753,122 @@ def calculate_shift_current(E_range=(3.0, 10.0), n_E=400, eta=0.050,
 
 if __name__ == "__main__":
 
-    # # 1. Band structure
-    # print("=" * 60)
-    # print("[1] Band Structure")
-    # print("=" * 60)
-    # cal_bands()
+    test_TB = False
+    test_wannier = True
 
-    # # 2. 3D bands
-    # print("\n" + "=" * 60)
-    # print("[2] 3D Band Structure")
-    # print("=" * 60)
-    # plot_3d_bands(n_grid=80)
+    if test_TB:
+        # 1. Band structure
+        print("=" * 60)
+        print("[1] Band Structure")
+        print("=" * 60)
+        cal_bands()
 
-    # # 3. Optical absorption
-    # print("\n" + "=" * 60)
-    # print("[3] Optical Absorption")
-    # print("=" * 60)
-    # calculate_optical_conductivity(n_k=1000, eta=0.01, E_range=(2.0, 8.0))
+        # 2. 3D bands
+        print("\n" + "=" * 60)
+        print("[2] 3D Band Structure")
+        print("=" * 60)
+        plot_3d_bands(n_grid=80)
 
-    # # 4. Transition matrix elements
-    # print("\n" + "=" * 60)
-    # print("[4] Transition Matrix Elements")
-    # print("=" * 60)
-    # plot_transition_matrix_elements(n_k=1000)
+        # 3. Optical absorption
+        print("\n" + "=" * 60)
+        print("[3] Optical Absorption")
+        print("=" * 60)
+        calculate_optical_conductivity(n_k=1000, eta=0.01, E_range=(2.0, 8.0))
 
-    # # 5. Shift current — symmetry check
-    # print("\n" + "=" * 60)
-    # print("[5] Shift Current — Symmetry Check")
-    # print("=" * 60)
+        # 4. Transition matrix elements
+        print("\n" + "=" * 60)
+        print("[4] Transition Matrix Elements")
+        print("=" * 60)
+        plot_transition_matrix_elements(n_k=1000)
 
-    # sc_kwargs = dict(n_k=500, eta=0.02, E_range=(2.0, 8.0))
+        # 5. Shift current — symmetry check
+        print("\n" + "=" * 60)
+        print("[5] Shift Current — Symmetry Check")
+        print("=" * 60)
 
-    # omegas, sigma_yyy = calculate_shift_current(comp=('y','y','y'), **sc_kwargs)
-    # _,      sigma_yxx = calculate_shift_current(comp=('y','x','x'), **sc_kwargs)
-    # _,      sigma_xxx = calculate_shift_current(comp=('x','x','x'), **sc_kwargs)
-    # _,      sigma_xyy = calculate_shift_current(comp=('x','y','y'), **sc_kwargs)
+        sc_kwargs = dict(n_k=500, eta=0.02, E_range=(2.0, 8.0))
 
-    # # Comparison plot
-    # plt.figure(figsize=(8, 6))
-    # plt.plot(omegas, sigma_yyy, 'r-',  lw=2, label=r'$\sigma^{yyy}$')
-    # plt.plot(omegas, sigma_yxx, 'b--', lw=2, label=r'$\sigma^{yxx}$')
-    # plt.plot(omegas, sigma_xxx, 'g:',  lw=2, label=r'$\sigma^{xxx}$')
-    # plt.plot(omegas, sigma_xyy, 'y:',  lw=2, label=r'$\sigma^{xyy}$')
-    # plt.axhline(0, color='k', lw=0.5, ls='--')
-    # plt.xlabel('Photon Energy (eV)')
-    # plt.ylabel('Shift Conductivity (μA / (V²·Å))')
-    # plt.title(r'hBN Shift Current')
-    # plt.legend()
-    # plt.grid(True, alpha=0.3)
-    # plt.xlim((2.0, 8.0))
-    # plt.tight_layout()
-    # plt.savefig("hBN_shift_comparison.png", dpi=300)
-    # plt.close()
+        omegas, sigma_yyy = calculate_shift_current(comp=('y','y','y'), **sc_kwargs)
+        _,      sigma_yxx = calculate_shift_current(comp=('y','x','x'), **sc_kwargs)
+        _,      sigma_xxx = calculate_shift_current(comp=('x','x','x'), **sc_kwargs)
+        _,      sigma_xyy = calculate_shift_current(comp=('x','y','y'), **sc_kwargs)
 
-    # # Verification
-    # print("\n" + "=" * 60)
-    # print("Symmetry Verification:")
-    # print(f"  |sigma^yyy| peak: {np.max(np.abs(sigma_yyy)):.6f}")
-    # print(f"  |sigma^yxx| peak: {np.max(np.abs(sigma_yxx)):.6f}")
-    # print(f"  |sigma^xxx| max:  {np.max(np.abs(sigma_xxx)):.6f}  (should be ≈ 0)")
-    # print(f"  |sigma^xyy| max:  {np.max(np.abs(sigma_xyy)):.6f}  (should be ≈ 0)")
-    # mask = np.abs(sigma_yxx) > 1e-8
-    # if np.any(mask):
-    #     ratio = np.mean(sigma_yyy[mask] / (-sigma_yxx[mask]))
-    #     print(f"  sigma^yyy / (-sigma^yxx): {ratio:.4f}  (should be ≈ 1)")
-    # print("=" * 60)
+        # Comparison plot
+        plt.figure(figsize=(8, 6))
+        plt.plot(omegas, sigma_yyy, 'r-',  lw=2, label=r'$\sigma^{yyy}$')
+        plt.plot(omegas, sigma_yxx, 'b--', lw=2, label=r'$\sigma^{yxx}$')
+        plt.plot(omegas, sigma_xxx, 'g:',  lw=2, label=r'$\sigma^{xxx}$')
+        plt.plot(omegas, sigma_xyy, 'y:',  lw=2, label=r'$\sigma^{xyy}$')
+        plt.axhline(0, color='k', lw=0.5, ls='--')
+        plt.xlabel('Photon Energy (eV)')
+        plt.ylabel('Shift Conductivity (μA / (V²·Å))')
+        plt.title(r'hBN Shift Current')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.xlim((2.0, 8.0))
+        plt.tight_layout()
+        plt.savefig("hBN_shift_comparison.png", dpi=300)
+        plt.close()
 
-    # 6. Wannier HR model examples
-    print("\n" + "=" * 60)
-    print("[6] Wannier HR Model Examples")
-    print("=" * 60)
+        # Verification
+        print("\n" + "=" * 60)
+        print("Symmetry Verification:")
+        print(f"  |sigma^yyy| peak: {np.max(np.abs(sigma_yyy)):.6f}")
+        print(f"  |sigma^yxx| peak: {np.max(np.abs(sigma_yxx)):.6f}")
+        print(f"  |sigma^xxx| max:  {np.max(np.abs(sigma_xxx)):.6f}  (should be ≈ 0)")
+        print(f"  |sigma^xyy| max:  {np.max(np.abs(sigma_xyy)):.6f}  (should be ≈ 0)")
+        mask = np.abs(sigma_yxx) > 1e-8
+        if np.any(mask):
+            ratio = np.mean(sigma_yyy[mask] / (-sigma_yxx[mask]))
+            print(f"  sigma^yyy / (-sigma^yxx): {ratio:.4f}  (should be ≈ 1)")
+        print("=" * 60)
 
-    cal_bands(model_type="wannier", save_prefix="_wannier")
-    calculate_optical_conductivity(model_type="wannier", n_k=500, eta=0.02,
-                                   E_range=(2.0, 8.0), save_prefix="_wannier")
-    plot_transition_matrix_elements(model_type="wannier", n_k=500, save_prefix="_wannier")
+    if test_wannier:
+        # 6. Wannier HR model examples
+        print("\n" + "=" * 60)
+        print("[6] Wannier HR Model Examples")
+        print("=" * 60)
 
-    sc_kwargs_w = dict(n_k=500, eta=0.02, E_range=(2.0, 8.0), save_prefix="_wannier",
-                       model_type="wannier")
-    calculate_shift_current(comp=('y','y','y'), **sc_kwargs_w)
-    omegas, sigma_yyy = calculate_shift_current(comp=('y','y','y'), **sc_kwargs_w)
-    _,      sigma_yxx = calculate_shift_current(comp=('y','x','x'), **sc_kwargs_w)
-    _,      sigma_xxx = calculate_shift_current(comp=('x','x','x'), **sc_kwargs_w)
-    _,      sigma_xyy = calculate_shift_current(comp=('x','y','y'), **sc_kwargs_w)
+        cal_bands(model_type="wannier", save_prefix="_wannier")
+        quit()
+        calculate_optical_conductivity(model_type="wannier", n_k=500, eta=0.02,
+                                    E_range=(2.0, 8.0), save_prefix="_wannier")
+        plot_transition_matrix_elements(model_type="wannier", n_k=500, save_prefix="_wannier")
 
-    # Comparison plot
-    plt.figure(figsize=(8, 6))
-    plt.plot(omegas, sigma_yyy, 'r-',  lw=2, label=r'$\sigma^{yyy}$')
-    plt.plot(omegas, sigma_yxx, 'b--', lw=2, label=r'$\sigma^{yxx}$')
-    plt.plot(omegas, sigma_xxx, 'g:',  lw=2, label=r'$\sigma^{xxx}$')
-    plt.plot(omegas, sigma_xyy, 'y:',  lw=2, label=r'$\sigma^{xyy}$')
-    plt.axhline(0, color='k', lw=0.5, ls='--')
-    plt.xlabel('Photon Energy (eV)')
-    plt.ylabel('Shift Conductivity (μA / (V²·Å))')
-    plt.title(r'hBN Shift Current')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.xlim((2.0, 8.0))
-    plt.tight_layout()
-    plt.savefig("hBN_shift_comparison_wannier.png", dpi=300)
-    plt.close()
+        sc_kwargs_w = dict(n_k=500, eta=0.02, E_range=(2.0, 8.0), save_prefix="_wannier",
+                        model_type="wannier")
 
-    # Verification
-    print("\n" + "=" * 60)
-    print("Symmetry Verification:")
-    print(f"  |sigma^yyy| peak: {np.max(np.abs(sigma_yyy)):.6f}")
-    print(f"  |sigma^yxx| peak: {np.max(np.abs(sigma_yxx)):.6f}")
-    print(f"  |sigma^xxx| max:  {np.max(np.abs(sigma_xxx)):.6f}  (should be ≈ 0)")
-    print(f"  |sigma^xyy| max:  {np.max(np.abs(sigma_xyy)):.6f}  (should be ≈ 0)")
-    mask = np.abs(sigma_yxx) > 1e-8
-    if np.any(mask):
-        ratio = np.mean(sigma_yyy[mask] / (-sigma_yxx[mask]))
-        print(f"  sigma^yyy / (-sigma^yxx): {ratio:.4f}  (should be ≈ 1)")
-    print("=" * 60)
+        omegas, sigma_yyy = calculate_shift_current(comp=('y','y','y'), **sc_kwargs_w)
+        _,      sigma_yxx = calculate_shift_current(comp=('y','x','x'), **sc_kwargs_w)
+        _,      sigma_xxx = calculate_shift_current(comp=('x','x','x'), **sc_kwargs_w)
+        _,      sigma_xyy = calculate_shift_current(comp=('x','y','y'), **sc_kwargs_w)
+
+        # Comparison plot
+        plt.figure(figsize=(8, 6))
+        plt.plot(omegas, sigma_yyy, 'r-',  lw=2, label=r'$\sigma^{yyy}$')
+        plt.plot(omegas, sigma_yxx, 'b--', lw=2, label=r'$\sigma^{yxx}$')
+        plt.plot(omegas, sigma_xxx, 'g:',  lw=2, label=r'$\sigma^{xxx}$')
+        plt.plot(omegas, sigma_xyy, 'y:',  lw=2, label=r'$\sigma^{xyy}$')
+        plt.axhline(0, color='k', lw=0.5, ls='--')
+        plt.xlabel('Photon Energy (eV)')
+        plt.ylabel('Shift Conductivity (μA / (V²·Å))')
+        plt.title(r'hBN Shift Current')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.xlim((2.0, 8.0))
+        plt.tight_layout()
+        plt.savefig("hBN_shift_comparison_wannier.png", dpi=300)
+        plt.close()
+
+        # Verification
+        print("\n" + "=" * 60)
+        print("Symmetry Verification:")
+        print(f"  |sigma^yyy| peak: {np.max(np.abs(sigma_yyy)):.6f}")
+        print(f"  |sigma^yxx| peak: {np.max(np.abs(sigma_yxx)):.6f}")
+        print(f"  |sigma^xxx| max:  {np.max(np.abs(sigma_xxx)):.6f}  (should be ≈ 0)")
+        print(f"  |sigma^xyy| max:  {np.max(np.abs(sigma_xyy)):.6f}  (should be ≈ 0)")
+        mask = np.abs(sigma_yxx) > 1e-8
+        if np.any(mask):
+            ratio = np.mean(sigma_yyy[mask] / (-sigma_yxx[mask]))
+            print(f"  sigma^yyy / (-sigma^yxx): {ratio:.4f}  (should be ≈ 1)")
+        print("=" * 60)
