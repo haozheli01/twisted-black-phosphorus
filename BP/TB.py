@@ -803,23 +803,35 @@ def plot_transition_matrix_elements(N_shell=1, E_field=0.0,
 def calculate_shift_current(N_shell=1, E_field=0.0,
                             E_range=(0.0, 1.0), n_E=400, eta=0.010,
                             k_range=0.15, n_k=60, comp=('x', 'y', 'y'),
-                            band_window=None, save_prefix=""):
-    """
-    Calculate shift current spectrum sigma^{abc}(ω) using the Sum-Over-States (SOS) method.
-    This method is gauge-invariant and stable against random eigenvector phases.
-    
-    Formula: Ref: Phys. Rev. B 61, 5337 (2000)
-    sigma^{abc} ~ sum_nm f_nm * Im[ r^b_mn * (r^c_nm)_{;a} ] * delta(w - w_mn),
-    r^b_mn = v^b_mn / (i * w_mn),
-    (r^c_nm)_{;a} = (-1/w_nm/i) * [ (v^c_nm * delta^a_nm + v^a_nm * delta^c_nm)/w_nm
-                    + sum_{p!=n,m} (v^c_np * v^a_pm / w_pm - v^a_np * v^c_pm / w_np) ],
-    Here: delta^a_nm = v^a_nn - v^a_mm
+                            band_window=None, save_prefix="", model=None):
+    r"""
+    Shift current sigma^{abc}(ω) via gauge-invariant Sum-Over-States method.
+
+    Ref: Phys. Rev. B 61, 5337 (2000)
+
+        \\sigma^{abc}(\omega) = C * \\sum_{nm}[ f_{nm} \\Im[r^b_{mn} (r^c_{nm})_{;a}] * \\delta(\omega - \omega_{mn})]
+
+    where:
+        r^b_{mn} = v^b_{mn} / (i \\omega_{mn})
+        (r^c_{nm})_{;a} = (-1/i\\omega_{nm}) [ term_A/\\omega_{nm} + term_B + term_C ]
+        term_A = v^c_{nm} \\delta^a_{nm} + v^a_{nm} \\delta^c_{nm}       (\\delta^a_{nm} = v^a_{nn} - v^a_{mm})
+        term_B = \\sum_{p\\neq n,m} [v^c_{np} v^a_{pm}/\\omega_{pm} - v^a_{np} v^c_{pm}/\\omega_{np}]
+        term_C = - v^{ac}_{nm}  (generalized derivative of velocity)
+
+    In the moire BP model, term_B is generally nonzero due to multiband couplings.
+
+    Parameters:
+        comp : (a, b, c) — tensor component directions
+        band_window : (v_start, v_end, c_start, c_end) or None
+        model : optional pre-built TwistedBPModel
     """
 
     a_dir, b_dir, c_dir = comp
-    print(f"Calculating shift current (SOS) for sigma^{{{a_dir}{b_dir}{c_dir}}}(\omega)...")
-    
-    model = TwistedBPModel(N_shell=N_shell, E_field=E_field)
+    print(f"Calculating shift current sigma^{{{a_dir}{b_dir}{c_dir}}}(omega) "
+          f"(n_k={n_k}, η={eta*1000:.0f} meV)...")
+
+    if model is None:
+        model = TwistedBPModel(N_shell=N_shell, E_field=E_field)
     
     # 1. Generate Grid
     kx = np.linspace(-k_range, k_range, n_k)
@@ -828,18 +840,16 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
     k_points = np.column_stack([KX.flatten(), KY.flatten()])
     Nk = len(k_points)
 
-    # 2. Diagonalize H -> E, U
-    # H_stack: (Nk, Nb, Nb)
+    # Diagonalize + velocity (same structure as hBN optical routine)
     H_stack = model.get_hamiltonians(k_points)
     evals, evecs = np.linalg.eigh(H_stack) 
     Nb = evals.shape[1]
 
-    # 3. Operators in Eigenbasis
-    # Compute v and w matrices in orbital basis
+    # Velocity / generalized derivative in orbital basis
     vx_orb, vy_orb = model.get_velocity_matrices(k_points)
+    w_xx, w_yy, w_xy = model.get_generalized_derivative_matrices(k_points)
     
-    # Transform to eigenbasis: O_eig = U.H @ O_orb @ U
-    # evecs is U, evecs.conj().transpose is U.H
+    # Velocity in eigenbasis
     U = evecs
     U_dag = np.conj(np.transpose(U, (0, 2, 1)))
 
@@ -848,12 +858,15 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
 
     # Store component maps
     v_map = {'x': to_eig(vx_orb), 'y': to_eig(vy_orb)}
+    w_map = {'xx': to_eig(w_xx), 'yy': to_eig(w_yy), 'xy': to_eig(w_xy), 'yx': to_eig(w_xy)}
 
     v_a = v_map[a_dir]
     v_b = v_map[b_dir]
     v_c = v_map[c_dir]
+    w_ac_key = a_dir + c_dir
+    w_ac = w_map[w_ac_key]
 
-    # 4. Band Selection
+    # Band selection
     mid = Nb // 2
     if band_window is None:
         v_idx = list(range(0, mid))
@@ -862,22 +875,19 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
         v_idx = list(range(band_window[0], band_window[1]+1))
         c_idx = list(range(band_window[2], band_window[3]+1))
 
-    # 5. Compute Spectrum
+    # Spectrum
     omegas = np.linspace(E_range[0], E_range[1], n_E)
     sigma = np.zeros_like(omegas)
     
-    print(f"  Summing over transitions ({len(v_idx)} valence x {len(c_idx)} conduction)...")
+    print(f"  Transitions: {len(v_idx)} val x {len(c_idx)} cond, Nk={Nk}")
     
-    # Loop over transition pairs (n -> m)
+    eps_denom = 1e-5
+
     for n in v_idx:
         for m in c_idx:
-            # Transition energy
-            w_mn = evals[:, m] - evals[:, n]
-
-            # Identify gaps to avoid singularities
-            nonzero_mask = w_mn > 1e-5
+            w_mn = evals[:, m] - evals[:, n]  # (Nk,), > 0 for insulator
+            nonzero = w_mn > eps_denom
             
-            # --- Occupation factor f_nm = f_n - f_m (half-filling) ---
             f_n = 1.0 if n < mid else 0.0
             f_m = 1.0 if m < mid else 0.0
             f_nm = f_n - f_m
@@ -885,50 +895,53 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
             if f_nm == 0.0:
                 continue
             
-            # --- Dipole Matrix Elements ---
-            # r_mn = v_mn / (i * w_mn)
+            # --- r^b_mn = v^b_{mn} / (i ω_mn) ---
             r_b_mn = np.zeros(Nk, dtype=np.complex128)
-            r_b_mn[nonzero_mask] = v_b[nonzero_mask, m, n] / (1j * w_mn[nonzero_mask])
+            r_b_mn[nonzero] = v_b[nonzero, m, n] / (1j * w_mn[nonzero])
             
-            # --- Generalized Derivative (r^b_nm)_{;a} ---
-            # Formula: (r^b_nm)_{;a} = (-1/w_nm/i) * [ (v^b_nm * delta^a_nm + v^a_nm * delta^b_nm)/w_nm     # term A
-            #                           + sum_{p!=n,m} (v^b_np * v^a_pm / w_pm - v^a_np * v^b_pm / w_np) ]  # term B
-            # Here: delta^a_nm = v^a_nn - v^a_mm
+            # --- Term A: intraband velocity differences ---
             termA = np.zeros(Nk, dtype=np.complex128)
-            termA[nonzero_mask] = v_c[nonzero_mask, n, m] * (v_a[nonzero_mask, n, n] - v_a[nonzero_mask, m, m]) +\
-                                    v_a[nonzero_mask, n, m] * (v_c[nonzero_mask, n, n] - v_c[nonzero_mask, m, m])
-            termA[nonzero_mask] /= (-1 * w_mn[nonzero_mask])
+            delta_a = v_a[nonzero, n, n] - v_a[nonzero, m, m]
+            delta_c = v_c[nonzero, n, n] - v_c[nonzero, m, m]
+            termA[nonzero] = (
+                v_c[nonzero, n, m] * delta_a
+                + v_a[nonzero, n, m] * delta_c
+            )
+            termA[nonzero] /= (-w_mn[nonzero])
             
-            # Sum over intermediate states p
-            termB = np.zeros(Nk, dtype=np.complex128)
-            
-            for p in range(Nb):
-                if p == n or p == m: continue
-                
-                w_np = evals[:, n] - evals[:, p]
-                w_pm = evals[:, p] - evals[:, m]
-                
-                # Check gaps
-                p_mask = nonzero_mask & (np.abs(w_np) > 1e-5) & (np.abs(w_pm) > 1e-5)
-                
-                if np.any(p_mask):
-                    term1 = v_c[p_mask, n, p] * v_a[p_mask, p, m] / w_pm[p_mask]
-                    term2 = v_a[p_mask, n, p] * v_c[p_mask, p, m] / w_np[p_mask]
-                    termB[p_mask] += (term1 - term2)
+            # --- Term B: sum over intermediate states (vectorized over p) ---
+            w_np = evals[:, n, None] - evals            # (Nk, Nb)
+            w_pm = evals - evals[:, m, None]            # (Nk, Nb)
 
-            # Construct generalized derivative
-            K_nm = termA + termB
+            valid_p = (np.abs(w_np) > eps_denom) & (np.abs(w_pm) > eps_denom)
+            valid_p[:, n] = False
+            valid_p[:, m] = False
+            valid_p &= nonzero[:, None]
+
+            num1 = v_c[:, n, :] * v_a[:, :, m]
+            num2 = v_a[:, n, :] * v_c[:, :, m]
+
+            termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
+            termB_contrib[valid_p] = (
+                num1[valid_p] / w_pm[valid_p]
+                - num2[valid_p] / w_np[valid_p]
+            )
+            termB = np.sum(termB_contrib, axis=1)
+
+            # --- Term C: generalized derivative correction ---
+            termC = -w_ac[:, n, m]
+
+            # --- Generalized derivative ---
+            K_nm = termA + termB + termC # important!
+            r_deriv = np.zeros(Nk, dtype=np.complex128)
+            r_deriv[nonzero] = K_nm[nonzero] / (-1j * (-w_mn[nonzero]))
             
-            r_c_nm_semicolon_a = np.zeros(Nk, dtype=np.complex128)
-            r_c_nm_semicolon_a[nonzero_mask] = K_nm[nonzero_mask] / (-1j * (-1 * w_mn[nonzero_mask]))
+            # --- Shift current weight ---
+            weight = f_nm * np.imag(r_b_mn * r_deriv)
             
-            # --- Shift Current Contribution ---
-            # Weight ~ Im[ r^b_nm * (r^c_nm)_{;a} ]
-            weight = f_nm * np.imag(r_b_mn * r_c_nm_semicolon_a)
-            
-            # Broadening
-            diff = omegas[:, None] - w_mn[None, :]
-            lorentz = (1/np.pi) * eta / (diff**2 + eta**2)
+            # --- Lorentzian broadening ---
+            diff = omegas[:, None] - w_mn[None, :]       # (n_E, Nk)
+            lorentz = (1.0/np.pi) * eta / (diff**2 + eta**2)
             
             # Accumulate
             sigma += np.sum(lorentz * weight[None, :], axis=1)
