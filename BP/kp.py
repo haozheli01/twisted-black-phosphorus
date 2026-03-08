@@ -412,7 +412,7 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
     # plt.title(f"Unfolded Band Structure{suffix}")
     plt.grid(True, alpha=0.3)
     plt.legend()
-    plt.savefig(f"TB_{suffix}.png", dpi=200)
+    plt.savefig(f"kp_{suffix}.png", dpi=200)
     plt.close()
 
     # Folded Plot
@@ -442,7 +442,7 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
     # plt.title(f"Folded Band Structure{suffix}")
     plt.grid(True, alpha=0.3)
     plt.legend()
-    plt.savefig(f"Folded_TB_{suffix}.png", dpi=200)
+    plt.savefig(f"Folded_kp_{suffix}.png", dpi=200)
     plt.close()
     
     print(f"Figures saved with suffix {suffix}")
@@ -527,10 +527,10 @@ def plot_3d_bands(N_shell=1, E_field=0.0, k_range=0.2, n_grid=40,
     
     suffix = f"_3D_E{E_field:.3f}{save_prefix}.png"
     plt.tight_layout()
-    plt.savefig(f"TB{suffix}", dpi=300)
+    plt.savefig(f"kp{suffix}", dpi=300)
     plt.close()
     
-    print(f"Saved 3D plot: TB{suffix}")
+    print(f"Saved 3D plot: kp{suffix}")
 
 def calculate_optical_conductivity(N_shell=1, E_field=0.0, 
                                    E_range=(0.0, 1.0), n_E=500, eta=0.010,
@@ -701,10 +701,10 @@ def calculate_optical_conductivity(N_shell=1, E_field=0.0,
     # plt.ylim(bottom=0)
     
     suffix = f"_Abs_E{E_field:.3f}{save_prefix}.png"
-    plt.savefig(f"TB{suffix}", dpi=300)
+    plt.savefig(f"kp{suffix}", dpi=300)
     plt.close()
     
-    print(f"Saved Optical Absorption Spectrum: TB{suffix}")
+    print(f"Saved Optical Absorption Spectrum: kp{suffix}")
 
 def plot_transition_matrix_elements(N_shell=1, E_field=0.0, 
                                     band_indices=None,
@@ -796,9 +796,9 @@ def plot_transition_matrix_elements(N_shell=1, E_field=0.0,
     plt.tight_layout()
     
     suffix = f"_M_E{E_field:.3f}_B{band_i}-{band_j}{save_prefix}.png" # 0-based
-    plt.savefig(f"TB{suffix}", dpi=300)
+    plt.savefig(f"kp{suffix}", dpi=300)
     plt.close()
-    print(f"Saved Matrix Element Map: TB{suffix}")
+    print(f"Saved Matrix Element Map: kp{suffix}")
 
 def calculate_shift_current(N_shell=1, E_field=0.0,
                             E_range=(0.0, 1.0), n_E=400, eta=0.010,
@@ -961,10 +961,10 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
     plt.xlim(E_range)
     
     suffix = f"_{a_dir}{b_dir}{c_dir}_E{E_field:.3f}{save_prefix}.png"
-    plt.savefig(f"TB{suffix}", dpi=300)
+    plt.savefig(f"kp{suffix}", dpi=300)
     plt.close()
     
-    print(f"Saved Shift Current Figure: TB{suffix}")
+    print(f"Saved Shift Current Figure: kp{suffix}")
     return omegas, sigma
 
 if __name__ == "__main__":
