@@ -4,6 +4,7 @@ import matplotlib as mpl
 mpl.rcParams['font.family'] = 'Arial'
 
 class TwistedBPModel:
+<<<<<<< HEAD
     def __init__(self, N_shell=1, N_top=1, N_bottom=1,
                  E_field=0.0, d_dist=0.54,
                  a_lat=3.296, b_lat=4.588,
@@ -12,6 +13,16 @@ class TwistedBPModel:
                  eta_AA = 1.161, eta_AB = 2.050, eta_AC = 0.460, eta_AD = 0.104,
                  eta_ACp = -0.9765, eta_ADp = 2.699,
                  gamma_AA = -1.563, gamma_AB = 3.607, gamma_AC = -1.572, gamma_AD = 0.179,
+=======
+    def __init__(self, N_shell=1,
+                 E_field=0.0, d_dist=0.54,
+                 a_lat=3.296, b_lat=4.588,
+                 delta_AA = -0.338, delta_AB = -2.912, delta_AC = 3.831, delta_AD = 0.076,
+                 delta_ACp = 0.712, delta_ADp = -0.132,
+                 eta_AA = 1.161, eta_AB = 2.050, eta_AC = 0.460, eta_AD = -0.104,
+                 eta_ACp = -0.9765, eta_ADp = 2.699,
+                 gamma_AA = -1.563, gamma_AB = 3.607, gamma_AC = -1.572, gamma_AD = -0.179,
+>>>>>>> 69a5788 (correct the hopping terms)
                  gamma_ACp = 2.443, gamma_ADp = 0.364,
                  kai_AB = 3.688, kai_AC = 2.208, kai_ACp = 2.071,
 
@@ -26,8 +37,11 @@ class TwistedBPModel:
         self.d_dist = d_dist # effective parameter for electric field influence in bandgap in Angstrom
         self.E_field = E_field # Electric field in eV/A, seemly opposite with physical direction
         self.N_shell = N_shell # Number of G shells to include
+<<<<<<< HEAD
         self.N_top = N_top # Number of top layers
         self.N_bottom = N_bottom # Number of bottom layers
+=======
+>>>>>>> 69a5788 (correct the hopping terms)
         # Tight-binding parameters (from fitting to DFT)
         self.u0, self.delta, self.kai = delta_AA + delta_AD, delta_AB + delta_AC, kai_AB + kai_AC
         self.gamma_x, self.gamma_y =  eta_AB + eta_AC, gamma_AB + gamma_AC
@@ -409,7 +423,7 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
     # plt.title(f"Unfolded Band Structure{suffix}")
     plt.grid(True, alpha=0.3)
     plt.legend()
-    plt.savefig(f"kp_{suffix}.png", dpi=200)
+    plt.savefig(f"continuum_{suffix}.png", dpi=200)
     plt.close()
 
     # Folded Plot
@@ -439,7 +453,7 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
     # plt.title(f"Folded Band Structure{suffix}")
     plt.grid(True, alpha=0.3)
     plt.legend()
-    plt.savefig(f"Folded_kp_{suffix}.png", dpi=200)
+    plt.savefig(f"Folded_continuum_{suffix}.png", dpi=200)
     plt.close()
     
     print(f"Figures saved with suffix {suffix}")
@@ -524,10 +538,10 @@ def plot_3d_bands(N_shell=1, E_field=0.0, k_range=0.2, n_grid=40,
     
     suffix = f"_3D_E{E_field:.3f}{save_prefix}.png"
     plt.tight_layout()
-    plt.savefig(f"kp{suffix}", dpi=300)
+    plt.savefig(f"continuum{suffix}", dpi=300)
     plt.close()
     
-    print(f"Saved 3D plot: kp{suffix}")
+    print(f"Saved 3D plot: continuum{suffix}")
 
 def calculate_optical_conductivity(N_shell=1, E_field=0.0, 
                                    E_range=(0.0, 1.0), n_E=500, eta=0.010,
@@ -708,10 +722,10 @@ def calculate_optical_conductivity(N_shell=1, E_field=0.0,
     # plt.ylim(bottom=0)
     
     suffix = f"_Abs_E{E_field:.3f}{save_prefix}.png"
-    plt.savefig(f"kp{suffix}", dpi=300)
+    plt.savefig(f"continuum{suffix}", dpi=300)
     plt.close()
     
-    print(f"Saved Optical Absorption Spectrum: kp{suffix}")
+    print(f"Saved Optical Absorption Spectrum: continuum{suffix}")
 
 def plot_transition_matrix_elements(N_shell=1, E_field=0.0, 
                                     band_indices=None,
@@ -803,9 +817,9 @@ def plot_transition_matrix_elements(N_shell=1, E_field=0.0,
     plt.tight_layout()
     
     suffix = f"_M_E{E_field:.3f}_B{band_i}-{band_j}{save_prefix}.png" # 0-based
-    plt.savefig(f"kp{suffix}", dpi=300)
+    plt.savefig(f"continuum{suffix}", dpi=300)
     plt.close()
-    print(f"Saved Matrix Element Map: kp{suffix}")
+    print(f"Saved Matrix Element Map: continuum{suffix}")
 
 def calculate_shift_current(N_shell=1, E_field=0.0,
                             E_range=(0.0, 1.0), n_E=400, eta=0.010,
@@ -976,7 +990,7 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
     plt.grid(True, alpha=0.3)
     plt.xlim(E_range)
     
-    fname = f"kp_sc.png"
+    fname = f"continuum_sc.png"
     plt.savefig(fname, dpi=300)
     plt.close()
     
@@ -990,7 +1004,7 @@ if __name__ == "__main__":
     G_moire = 2 * np.pi * np.abs(1/b_lat - 1/a_lat) # Moiré G vector magnitude for real lattice
 
     # Calculate Area
-    area_uc = 2 * a_lat * b_lat # Approximate factor (depends on supercell definition)
+    area_uc = a_lat * b_lat # Approximate factor (depends on supercell definition)
     
     # single k point test
     # --------------------------------------------
@@ -1011,8 +1025,8 @@ if __name__ == "__main__":
                   
     # Optical Conductivity
     # --------------------------------------------
-    # calculate_optical_conductivity(N_shell=1, E_field=0.0, n_k=160, n_E=500,
-    #                                eta=0.010, k_range=G_moire/2, E_range=(0.0, 2.0))
+    calculate_optical_conductivity(N_shell=1, E_field=0.0, n_k=240, n_E=500,
+                                   eta=0.010, k_range=G_moire/2, E_range=(0.0, 3.0))
                                    
     # # Matrix Element Map (VBM -> CBM)
     # --------------------------------------------
