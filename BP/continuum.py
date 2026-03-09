@@ -4,16 +4,6 @@ import matplotlib as mpl
 mpl.rcParams['font.family'] = 'Arial'
 
 class TwistedBPModel:
-<<<<<<< HEAD
-    def __init__(self, N_shell=1, N_top=1, N_bottom=1,
-                 E_field=0.0, d_dist=0.54,
-                 a_lat=3.296, b_lat=4.588,
-                 delta_AA = -0.338, delta_AB = -2.912, delta_AC = 3.831, delta_AD = -0.076,
-                 delta_ACp = 0.712, delta_ADp = -0.132,
-                 eta_AA = 1.161, eta_AB = 2.050, eta_AC = 0.460, eta_AD = 0.104,
-                 eta_ACp = -0.9765, eta_ADp = 2.699,
-                 gamma_AA = -1.563, gamma_AB = 3.607, gamma_AC = -1.572, gamma_AD = 0.179,
-=======
     def __init__(self, N_shell=1,
                  E_field=0.0, d_dist=0.54,
                  a_lat=3.296, b_lat=4.588,
@@ -22,7 +12,6 @@ class TwistedBPModel:
                  eta_AA = 1.161, eta_AB = 2.050, eta_AC = 0.460, eta_AD = -0.104,
                  eta_ACp = -0.9765, eta_ADp = 2.699,
                  gamma_AA = -1.563, gamma_AB = 3.607, gamma_AC = -1.572, gamma_AD = -0.179,
->>>>>>> 69a5788 (correct the hopping terms)
                  gamma_ACp = 2.443, gamma_ADp = 0.364,
                  kai_AB = 3.688, kai_AC = 2.208, kai_ACp = 2.071,
 
@@ -37,11 +26,6 @@ class TwistedBPModel:
         self.d_dist = d_dist # effective parameter for electric field influence in bandgap in Angstrom
         self.E_field = E_field # Electric field in eV/A, seemly opposite with physical direction
         self.N_shell = N_shell # Number of G shells to include
-<<<<<<< HEAD
-        self.N_top = N_top # Number of top layers
-        self.N_bottom = N_bottom # Number of bottom layers
-=======
->>>>>>> 69a5788 (correct the hopping terms)
         # Tight-binding parameters (from fitting to DFT)
         self.u0, self.delta, self.kai = delta_AA + delta_AD, delta_AB + delta_AC, kai_AB + kai_AC
         self.gamma_x, self.gamma_y =  eta_AB + eta_AC, gamma_AB + gamma_AC
