@@ -4,11 +4,17 @@ import matplotlib as mpl
 mpl.rcParams['font.family'] = 'Arial'
 
 class TwistedBPModel:
-    def __init__(self, N_shell=1, E_field=0.0, d_dist=0.54,
+    def __init__(self, N_shell=1, N_top=1, N_bottom=1,
+                 E_field=0.0, d_dist=0.54,
                  a_lat=3.296, b_lat=4.588,
-                 u0 = -0.414, delta=0.919, kai=5.896,
-                 etax = 1.265, etay = -1.384,
-                 gamma_x = 2.510, gamma_y = 2.035,
+                 delta_AA = -0.338, delta_AB = -2.912, delta_AC = 3.831, delta_AD = -0.076,
+                 delta_ACp = 0.712, delta_ADp = -0.132,
+                 eta_AA = 1.161, eta_AB = 2.050, eta_AC = 0.460, eta_AD = 0.104,
+                 eta_ACp = -0.9765, eta_ADp = 2.699,
+                 gamma_AA = -1.563, gamma_AB = 3.607, gamma_AC = -1.572, gamma_AD = 0.179,
+                 gamma_ACp = 2.443, gamma_ADp = 0.364,
+                 kai_AB = 3.688, kai_AC = 2.208, kai_ACp = 2.071,
+
                  gamma_C=0.39, gamma_V=0.07,
                  ):
         """
@@ -20,12 +26,17 @@ class TwistedBPModel:
         self.d_dist = d_dist # effective parameter for electric field influence in bandgap in Angstrom
         self.E_field = E_field # Electric field in eV/A, seemly opposite with physical direction
         self.N_shell = N_shell # Number of G shells to include
-
+        self.N_top = N_top # Number of top layers
+        self.N_bottom = N_bottom # Number of bottom layers
         # Tight-binding parameters (from fitting to DFT)
-        self.u0, self.delta, self.kai = u0, delta, kai
-        self.gamma_x, self.gamma_y =  gamma_x, gamma_y
+        self.u0, self.delta, self.kai = delta_AA + delta_AD, delta_AB + delta_AC, kai_AB + kai_AC
+        self.gamma_x, self.gamma_y =  eta_AB + eta_AC, gamma_AB + gamma_AC
+        self.etax, self.etay = eta_AA + eta_AD, gamma_AA + gamma_AD
+        self.delta_ACp, self.delta_ADp = delta_ACp, delta_ADp
+        self.eta_ACp, self.eta_ADp = eta_ACp, eta_ADp
+        self.gamma_ACp, self.gamma_ADp = gamma_ACp, gamma_ADp
+        self.kai_ACp = kai_ACp
         self.gamma_C, self.gamma_V =  gamma_C, gamma_V # interlayer coupling parameters in eV
-        self.etax, self.etay = etax, etay
 
         # Initialize Grid
         self._init_grid()
@@ -49,7 +60,9 @@ class TwistedBPModel:
         # print(self.G_vectors)
 
         self.dim_G = len(self.G_vectors)
-        self.dim_H = 4 * self.dim_G # dimension of total Hamiltonian
+        self.dim_H_top = 2 * self.dim_G * self.N_top # dimension of top layer Hamiltonian
+        self.dim_H_bottom = 2 * self.dim_G * self.N_bottom # dimension of bottom layer Hamiltonian
+        self.dim_H = self.dim_H_top + self.dim_H_bottom # total Hamiltonian dimension
         
         # Precompute k-independent part of Hamiltonian (Interlayer coupling)
         self.H_const = self._build_constant_hamiltonian()
@@ -60,12 +73,13 @@ class TwistedBPModel:
     def _build_constant_hamiltonian(self):
         """Pre-compute the part of Hamiltonian that doesn't depend on k (Hopping between layers)"""
         H = np.zeros((self.dim_H, self.dim_H), dtype=np.complex128)
+        dim_block = 2 * (self.dim_H_top + self.dim_H_bottom) # total dimension of the Hamiltonian for one G
         
         # --- Diagonal in G (Interlayer Conduction) ---
         # Tc(0) <-> Bc(2) with coupling gamma_C
-        idx = np.arange(self.dim_G) # num of 4x4 blocks
-        H[idx * 4 + 0, idx * 4 + 2] = self.gamma_C
-        H[idx * 4 + 2, idx * 4 + 0] = self.gamma_C
+        idx = np.arange(self.dim_G) # num of blocks
+        H[idx * dim_block + 2 * (self.dim_H_top-1) + 0, idx * dim_block + 2 * (self.dim_H_top-1) + 2] = self.gamma_C
+        H[idx * dim_block + 2 * (self.dim_H_top-1) + 2, idx * dim_block + 2 * (self.dim_H_top-1) + 0] = self.gamma_C
         
         # --- Off-diagonal in G (Interlayer Valence) ---
         # Tv(1) <-> Bv(3) with coupling gamma_V
@@ -82,15 +96,8 @@ class TwistedBPModel:
         
         rows, cols = np.where(mask)
 
-        delta_g = self.G_vectors[rows] - self.G_vectors[cols]
-        r0 = np.array([0.0, 0.0]) # reference point for phase, can be set to (0,0) for simplicity since only relative phases matter
-        phase = np.exp(1j * np.dot(delta_g, r0))
-        
-        H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V * phase
-        H[cols * 4 + 3, rows * 4 + 1] = self.gamma_V * np.conj(phase)
-
-        # H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V
-        # H[cols * 4 + 3, rows * 4 + 1] = self.gamma_V
+        H[rows * dim_block + 2 * (self.dim_H_top-1) + 1, cols * dim_block + 2 * (self.dim_H_top-1) + 3] = self.gamma_V
+        H[cols * dim_block + 2 * (self.dim_H_top-1) + 3, rows * dim_block + 2 * (self.dim_H_top-1) + 1] = self.gamma_V
         
         return H
     
@@ -125,21 +132,24 @@ class TwistedBPModel:
         p2_x = kx**2
         p2_y = ky**2
         
-        # --- Layer 1 (Top) ---
-        # Parameters
-        val_Tc = self.u0 + u_pot + self.etax * p2_x + self.etay * p2_y
-        val_Tv = self.u0 + u_pot + self.etax * p2_x + self.etay * p2_y
-        val_T_mix = self.delta + self.gamma_x * p2_x + self.gamma_y * p2_y + 1j * self.kai * ky
+        # Assign to diagonal blocks for all G at once
+        # Indices array (Ng,) to broadcast with (Nk, Ng)
+        r = np.arange(self.dim_G)
+
+        # --- Layer (Top) ---
+        for idx in range(self.N_top):
+            sf = np.cos(np.pi * idx / (self.N_top + 1)) # scaling factor
+            # Parameters
+            val_Tc = (self.u0 + sf * self.delta_ADp) + u_pot + self.etax * p2_x + self.etay * p2_y
+            val_Tv = self.u0 + u_pot + self.etax * p2_x + self.etay * p2_y
+            val_T_mix = self.delta + self.gamma_x * p2_x + self.gamma_y * p2_y + 1j * self.kai * ky
         
-        # --- Layer 2 (Bottom) ---
+        # --- Layer (Bottom) ---
         # Rotated 90 deg: p_x -> -p_y, p_y -> p_x
         val_Bc = self.u0 - u_pot + self.etax * p2_y + self.etay * p2_x
         val_Bv = self.u0 - u_pot + self.etax * p2_y + self.etay * p2_x
         val_B_mix = self.delta + self.gamma_x * p2_y + self.gamma_y * p2_x + 1j * self.kai * kx
         
-        # Assign to diagonal blocks for all G at once
-        # Indices array (Ng,) to broadcast with (Nk, Ng)
-        r = np.arange(self.dim_G)
         
         # Diagonals
         H_stack[:, r*4+0, r*4+0] += val_Tc
@@ -1012,6 +1022,6 @@ if __name__ == "__main__":
     
     # # Shift Current Calculation
     # --------------------------------------------   
-    calculate_shift_current(N_shell=1, E_field=0.0, n_k=240, n_E=100,
+    calculate_shift_current(N_shell=2, E_field=0.0, n_k=120, n_E=100,
                             # band_window=(8,9,10,10), 
                             E_range=(0.0, 3.0), k_range=G_moire/2,)
