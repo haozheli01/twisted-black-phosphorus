@@ -53,6 +53,9 @@ class TwistedBPModel:
         
         # Precompute k-independent part of Hamiltonian (Interlayer coupling)
         self.H_const = self._build_constant_hamiltonian()
+        
+        # Precompute k-independent generalized derivative matrices (d^2H/dk_mu dk_nu)
+        self._precompute_w_matrices()
 
     def _build_constant_hamiltonian(self):
         """Pre-compute the part of Hamiltonian that doesn't depend on k (Hopping between layers)"""
@@ -115,7 +118,8 @@ class TwistedBPModel:
         ky = k_cur[:, :, 1]
         
         # Prepare base matrix from constant part
-        H_stack = np.tile(self.H_const, (Nk, 1, 1))
+        H_stack = np.empty((Nk, self.dim_H, self.dim_H), dtype=np.complex128)
+        H_stack[:] = self.H_const
         
         # Kinetic Terms (p^2)
         p2_x = kx**2
@@ -212,51 +216,52 @@ class TwistedBPModel:
         
         return vx_stack, vy_stack
 
+    def _precompute_w_matrices(self):
+        """Pre-compute k-independent generalized derivative matrices (d^2H/dk_mu dk_nu)."""
+        r = np.arange(self.dim_G)
+        
+        w_xx = np.zeros((self.dim_H, self.dim_H), dtype=np.complex128)
+        w_yy = np.zeros((self.dim_H, self.dim_H), dtype=np.complex128)
+        w_xy = np.zeros((self.dim_H, self.dim_H), dtype=np.complex128)
+        
+        # --- Top Layer ---
+        w_xx[r*4+0, r*4+0] = 2 * self.etax
+        w_yy[r*4+0, r*4+0] = 2 * self.etay
+        w_xx[r*4+1, r*4+1] = 2 * self.etax
+        w_yy[r*4+1, r*4+1] = 2 * self.etay
+        
+        # --- Bottom Layer (Rotated 90 deg: alpha_x <-> alpha_y) ---
+        w_xx[r*4+2, r*4+2] = 2 * self.etay
+        w_yy[r*4+2, r*4+2] = 2 * self.etax
+        w_xx[r*4+3, r*4+3] = 2 * self.etay
+        w_yy[r*4+3, r*4+3] = 2 * self.etax
+        
+        # --- Mixing Terms ---
+        w_xx[r*4+0, r*4+1] = 2 * self.gamma_x
+        w_xx[r*4+1, r*4+0] = 2 * self.gamma_x
+        w_yy[r*4+0, r*4+1] = 2 * self.gamma_y
+        w_yy[r*4+1, r*4+0] = 2 * self.gamma_y
+        w_xx[r*4+2, r*4+3] = 2 * self.gamma_y
+        w_xx[r*4+3, r*4+2] = 2 * self.gamma_y
+        w_yy[r*4+2, r*4+3] = 2 * self.gamma_x
+        w_yy[r*4+3, r*4+2] = 2 * self.gamma_x
+        
+        self.w_xx_const = w_xx
+        self.w_yy_const = w_yy
+        self.w_xy_const = w_xy
+
     def get_generalized_derivative_matrices(self, k_points):
         """
         w_munu = d^2H / dk_mu dk_nu
         Returns operator matrices w_xx, w_yy, w_xy representing the curvature of the Hamiltonian.
+        Tiles the precomputed constant matrices to match the number of k-points.
         """
         k_points = np.atleast_2d(k_points)
         Nk = len(k_points)
         
-        # Initialize zero matrices of shape (Nk, dim_H, dim_H)
-        w_xx = np.zeros((Nk, self.dim_H, self.dim_H), dtype=np.complex128)
-        w_yy = np.zeros((Nk, self.dim_H, self.dim_H), dtype=np.complex128)
-        w_xy = np.zeros((Nk, self.dim_H, self.dim_H), dtype=np.complex128)
-        
-        r = np.arange(self.dim_G)
-        
-        # --- Top Layer ---
-        # Tc(0): 
-        w_xx[:, r*4+0, r*4+0] = 2 * self.etax
-        w_yy[:, r*4+0, r*4+0] = 2 * self.etay
-        
-        # Tv(1)
-        w_xx[:, r*4+1, r*4+1] = 2 * self.etax
-        w_yy[:, r*4+1, r*4+1] = 2 * self.etay
-        
-        # --- Bottom Layer (Rotated 90 deg: alpha_x <-> alpha_y) ---
-        # Bc(2)
-        w_xx[:, r*4+2, r*4+2] = 2 * self.etay
-        w_yy[:, r*4+2, r*4+2] = 2 * self.etax
-        
-        # Bv(3)
-        w_xx[:, r*4+3, r*4+3] = 2 * self.etay
-        w_yy[:, r*4+3, r*4+3] = 2 * self.etax
-        
-        # --- Mixing Terms ---
-        # Top Mixing (0-1): 
-        w_xx[:, r*4+0, r*4+1] = 2 * self.gamma_x
-        w_xx[:, r*4+1, r*4+0] = 2 * self.gamma_x
-        w_yy[:, r*4+0, r*4+1] = 2 * self.gamma_y
-        w_yy[:, r*4+1, r*4+0] = 2 * self.gamma_y
-
-        # Bottom Mixing (2-3): 
-        w_xx[:, r*4+2, r*4+3] = 2 * self.gamma_y
-        w_xx[:, r*4+3, r*4+2] = 2 * self.gamma_y
-        w_yy[:, r*4+2, r*4+3] = 2 * self.gamma_x
-        w_yy[:, r*4+3, r*4+2] = 2 * self.gamma_x
+        w_xx = np.broadcast_to(self.w_xx_const, (Nk, self.dim_H, self.dim_H))
+        w_yy = np.broadcast_to(self.w_yy_const, (Nk, self.dim_H, self.dim_H))
+        w_xy = np.broadcast_to(self.w_xy_const, (Nk, self.dim_H, self.dim_H))
 
         return w_xx, w_yy, w_xy
 
@@ -616,40 +621,50 @@ def calculate_optical_conductivity(N_shell=1, E_field=0.0,
     
     print(f"  Summing transitions...")
     
-    # Vectorize summation over bands
-    for i in range(mid_idx):
-        for j in range(mid_idx, n_bands):
-            # Energy difference
-            delta_E = evals[:, j] - evals[:, i] # (Nk,)
-
-            # |\langle c|v_i|v \rangle|^2 / (\Delta E)^2
-            #
-            # NOTE:
-            # The (ΔE)^{-2} factor does NOT belong to the bare transition rate.
-            # It appears here because we are constructing \epsilon_2(\omega) (or an absorption-like
-            # response), i.e. an electric-field response function.
-            #
-            # Using \hbar \omega = \Delta E, this factor accounts for the conversion from vector
-            # potential A to electric field E, and makes the result equivalent
-            # to the length-gauge formulation.
-            # Matrix elements for this pair
-            M_ij_x = Mx2[:, i, j] / delta_E**2  # (Nk,)
-            M_ij_y = My2[:, i, j] / delta_E**2  # (Nk,)
-            
-            # Add to spectrum
-            # Kubo formula component: sum |M|^2 * delta(E - w)
-            # We calculate this spectral function S(w) first.
-            
-            # Broadcast: (N_E, 1) - (1, Nk)
-            diff = omegas[:, None] - delta_E[None, :]
-            lorentz = (1/np.pi) * eta / (diff**2 + eta**2) # (N_E, Nk)
-            
-            # Sum over k
-            weight_x = np.sum(M_ij_x[None, :] * lorentz, axis=1) # (N_E,)
-            weight_y = np.sum(M_ij_y[None, :] * lorentz, axis=1)
-            
-            sigma_xx += weight_x
-            sigma_yy += weight_y
+    # Vectorized over all valence-conduction band pairs
+    # Extract valence and conduction blocks of matrix elements
+    # Mx2, My2: (Nk, Nb, Nb). We need Mx2[:, i, j] for i in [0,mid), j in [mid,Nb)
+    Mx2_vc = Mx2[:, :mid_idx, mid_idx:]  # (Nk, Nv, Nc)
+    My2_vc = My2[:, :mid_idx, mid_idx:]  # (Nk, Nv, Nc)
+    
+    # Energy differences for all v-c pairs: (Nk, Nv, Nc)
+    delta_E_all = evals[:, mid_idx:, None] - evals[:, None, :mid_idx]  # (Nk, Nc, Nv)
+    delta_E_all = delta_E_all.transpose(0, 2, 1)  # (Nk, Nv, Nc)
+    
+    # |<c|v_i|v>|^2 / (Delta E)^2
+    #
+    # NOTE:
+    # The (ΔE)^{-2} factor does NOT belong to the bare transition rate.
+    # It appears here because we are constructing \epsilon_2(\omega) (or an absorption-like
+    # response), i.e. an electric-field response function.
+    #
+    # Using \hbar \omega = \Delta E, this factor accounts for the conversion from vector
+    # potential A to electric field E, and makes the result equivalent
+    # to the length-gauge formulation.
+    M_weighted_x = Mx2_vc / delta_E_all**2  # (Nk, Nv, Nc)
+    M_weighted_y = My2_vc / delta_E_all**2
+    
+    # Flatten pairs dimension: (Nk, Nv*Nc)
+    N_pairs = mid_idx * (n_bands - mid_idx)
+    M_flat_x = M_weighted_x.reshape(Nk, N_pairs)
+    M_flat_y = M_weighted_y.reshape(Nk, N_pairs)
+    dE_flat = delta_E_all.reshape(Nk, N_pairs)
+    
+    # Process in batches to limit memory: (n_E, Nk, batch) Lorentzian
+    batch_size = max(1, min(N_pairs, max(1, 200_000_000 // (n_E * Nk))))
+    for b_start in range(0, N_pairs, batch_size):
+        b_end = min(b_start + batch_size, N_pairs)
+        dE_batch = dE_flat[:, b_start:b_end]       # (Nk, batch)
+        Mx_batch = M_flat_x[:, b_start:b_end]      # (Nk, batch)
+        My_batch = M_flat_y[:, b_start:b_end]
+        
+        # Lorentzian: (n_E, Nk, batch)
+        diff = omegas[:, None, None] - dE_batch[None, :, :]
+        lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+        
+        # Sum over k and batch dims
+        sigma_xx += np.sum(lorentz * Mx_batch[None, :, :], axis=(1, 2))
+        sigma_yy += np.sum(lorentz * My_batch[None, :, :], axis=(1, 2))
 
     # Normalize by number of k-points (density)
     sigma_xx /= Nk
@@ -784,8 +799,7 @@ def plot_transition_matrix_elements(N_shell=1, E_field=0.0,
 
 def calculate_shift_current(N_shell=1, E_field=0.0,
                             E_range=(0.0, 1.0), n_E=400, eta=0.010,
-                            k_range=0.15, n_k=60, comp=('x', 'y', 'y'),
-                            band_window=None, save_prefix="", model=None):
+                            k_range=0.15, n_k=60, band_window=None):
     r"""
     Shift current sigma^{abc}(ω) via gauge-invariant Sum-Over-States method.
 
@@ -810,40 +824,52 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
     comp_list=[('x', 'x', 'x'), ('x', 'y', 'y'), ('y', 'x', 'x'), ('y', 'y', 'y')]
     plt.figure(figsize=(8, 6))
 
+    # --- Shared computation for all components (done once) ---
+    model = TwistedBPModel(N_shell=N_shell, E_field=E_field)
+    
+    kx = np.linspace(-k_range, k_range, n_k)
+    ky = np.linspace(-k_range, k_range, n_k)
+    KX, KY = np.meshgrid(kx, ky)
+    k_points = np.column_stack([KX.flatten(), KY.flatten()])
+    Nk = len(k_points)
+
+    H_stack = model.get_hamiltonians(k_points)
+    evals, evecs = np.linalg.eigh(H_stack) 
+    Nb = evals.shape[1]
+
+    vx_orb, vy_orb = model.get_velocity_matrices(k_points)
+    w_xx, w_yy, w_xy = model.get_generalized_derivative_matrices(k_points)
+    
+    U = evecs
+    U_dag = np.conj(np.transpose(U, (0, 2, 1)))
+
+    def to_eig(O):
+        return U_dag @ O @ U
+
+    v_map = {'x': to_eig(vx_orb), 'y': to_eig(vy_orb)}
+    w_map = {'xx': to_eig(w_xx), 'yy': to_eig(w_yy), 'xy': to_eig(w_xy), 'yx': to_eig(w_xy)}
+
+    # Band selection
+    mid = Nb // 2
+    if band_window is None:
+        v_idx = np.arange(0, mid)
+        c_idx = np.arange(mid, Nb)
+    else:
+        v_idx = np.arange(band_window[0], band_window[1]+1)
+        c_idx = np.arange(band_window[2], band_window[3]+1)
+
+    # Precompute all energy differences for Term B (shared across components)
+    eps_denom = 1e-5
+    # w_all[k, a, b] = E_a - E_b
+    w_all = evals[:, :, None] - evals[:, None, :]  # (Nk, Nb, Nb)
+
+    omegas = np.linspace(E_range[0], E_range[1], n_E)
+    results = {}
+
     for comp in comp_list:
         a_dir, b_dir, c_dir = comp
         print(f"Calculating shift current sigma^{{{a_dir}{b_dir}{c_dir}}}(omega) "
             f"(n_k={n_k}, η={eta*1000:.0f} meV)...")
-
-        if model is None:
-            model = TwistedBPModel(N_shell=N_shell, E_field=E_field)
-        
-        # 1. Generate Grid
-        kx = np.linspace(-k_range, k_range, n_k)
-        ky = np.linspace(-k_range, k_range, n_k)
-        KX, KY = np.meshgrid(kx, ky)
-        k_points = np.column_stack([KX.flatten(), KY.flatten()])
-        Nk = len(k_points)
-
-        # Diagonalize + velocity (same structure as hBN optical routine)
-        H_stack = model.get_hamiltonians(k_points)
-        evals, evecs = np.linalg.eigh(H_stack) 
-        Nb = evals.shape[1]
-
-        # Velocity / generalized derivative in orbital basis
-        vx_orb, vy_orb = model.get_velocity_matrices(k_points)
-        w_xx, w_yy, w_xy = model.get_generalized_derivative_matrices(k_points)
-        
-        # Velocity in eigenbasis
-        U = evecs
-        U_dag = np.conj(np.transpose(U, (0, 2, 1)))
-
-        def to_eig(O):
-            return U_dag @ O @ U
-
-        # Store component maps
-        v_map = {'x': to_eig(vx_orb), 'y': to_eig(vy_orb)}
-        w_map = {'xx': to_eig(w_xx), 'yy': to_eig(w_yy), 'xy': to_eig(w_xy), 'yx': to_eig(w_xy)}
 
         v_a = v_map[a_dir]
         v_b = v_map[b_dir]
@@ -851,53 +877,51 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
         w_ac_key = a_dir + c_dir
         w_ac = w_map[w_ac_key]
 
-        # Band selection
-        mid = Nb // 2
-        if band_window is None:
-            v_idx = list(range(0, mid))
-            c_idx = list(range(mid, Nb))
-        else:
-            v_idx = list(range(band_window[0], band_window[1]+1))
-            c_idx = list(range(band_window[2], band_window[3]+1))
-
         # Spectrum
-        omegas = np.linspace(E_range[0], E_range[1], n_E)
         sigma = np.zeros_like(omegas)
         
         print(f"  Transitions: {len(v_idx)} val x {len(c_idx)} cond, Nk={Nk}")
-        
-        eps_denom = 1e-5
 
         for n in v_idx:
+            f_n = 1.0 if n < mid else 0.0
+            
+            # Precompute n-row velocity slices once per n
+            v_c_n_row = v_c[:, n, :]  # (Nk, Nb)
+            v_a_n_row = v_a[:, n, :]  # (Nk, Nb)
+            v_a_nn = v_a[:, n, n]     # (Nk,)
+            v_c_nn = v_c[:, n, n]     # (Nk,)
+            w_n_all = w_all[:, n, :]  # (Nk, Nb)  w_np = E_n - E_p
+            
             for m in c_idx:
-                w_mn = evals[:, m] - evals[:, n]
-                nonzero = w_mn > eps_denom
-
-                f_n = 1.0 if n < mid else 0.0
                 f_m = 1.0 if m < mid else 0.0
                 f_nm = f_n - f_m
                 if f_nm == 0.0:
                     continue
+
+                w_mn = evals[:, m] - evals[:, n]  # (Nk,)
+                nonzero = w_mn > eps_denom
 
                 r_b_mn = np.zeros(Nk, dtype=np.complex128)
                 r_b_mn[nonzero] = v_b[nonzero, m, n] / (1j * w_mn[nonzero])
 
                 # Term A
                 termA = np.zeros(Nk, dtype=np.complex128)
-                delta_a = v_a[nonzero, n, n] - v_a[nonzero, m, m]
-                delta_c = v_c[nonzero, n, n] - v_c[nonzero, m, m]
+                delta_a = v_a_nn[nonzero] - v_a[nonzero, m, m]
+                delta_c = v_c_nn[nonzero] - v_c[nonzero, m, m]
                 termA[nonzero] = (v_c[nonzero, n, m] * delta_a
                                 + v_a[nonzero, n, m] * delta_c) / (-w_mn[nonzero])
 
-                # Term B
-                w_np = evals[:, n, None] - evals
-                w_pm = evals - evals[:, m, None]
+                # Term B — use precomputed energy differences
+                w_np = w_n_all          # (Nk, Nb)
+                w_pm = w_all[:, :, m]   # (Nk, Nb)  w_pm = E_p - E_m
                 valid_p = (np.abs(w_np) > eps_denom) & (np.abs(w_pm) > eps_denom)
                 valid_p[:, n] = False;  valid_p[:, m] = False
                 valid_p &= nonzero[:, None]
 
-                num1 = v_c[:, n, :] * v_a[:, :, m]
-                num2 = v_a[:, n, :] * v_c[:, :, m]
+                v_a_col_m = v_a[:, :, m]  # (Nk, Nb)
+                v_c_col_m = v_c[:, :, m]  # (Nk, Nb)
+                num1 = v_c_n_row * v_a_col_m
+                num2 = v_a_n_row * v_c_col_m
                 termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
                 termB_contrib[valid_p] = (num1[valid_p] / w_pm[valid_p]
                                         - num2[valid_p] / w_np[valid_p])
@@ -926,9 +950,14 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
         A_uc = model.a_lat * model.b_lat  # Å² (orthorhombic unit cell)
         prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6  # → μA·Å / V²
         sigma *= prefactor
+        results[comp] = sigma
 
-        # --- Plotting ---
-        plt.plot(omegas, sigma, lw=2, label=fr'$\sigma^{{{a_dir}{b_dir}{c_dir}}}(\omega)$')
+    # --- Plotting ---
+    plt.plot(omegas, results[('x', 'x', 'x')], 'r-', lw=2, label=fr'$\sigma^{{xxx}}(\omega)$')
+    plt.plot(omegas, results[('y', 'y', 'y')], 'b--', lw=2, label=fr'$\sigma^{{yyy}}(\omega)$')
+    plt.plot(omegas, results[('y', 'x', 'x')], 'g-', lw=2, label=fr'$\sigma^{{yxx}}(\omega)$')
+    plt.plot(omegas, results[('x', 'y', 'y')], 'm--', lw=2, label=fr'$\sigma^{{xyy}}(\omega)$')
+
     plt.axhline(0, color='k', lw=0.5, ls='--')
     plt.xlabel('Photon Energy (eV)')
     plt.ylabel(r'Shift Conductivity ($\mu$A$\cdot$Å/V$^2$)')
@@ -942,7 +971,7 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
     plt.close()
     
     print(f"Saved Shift Current Figure")
-    return omegas, sigma
+    return omegas, results
 
 if __name__ == "__main__":
     # BP parameters
@@ -985,4 +1014,4 @@ if __name__ == "__main__":
     # --------------------------------------------   
     calculate_shift_current(N_shell=1, E_field=0.0, n_k=240, n_E=100,
                             # band_window=(8,9,10,10), 
-                            E_range=(0.0, 2.4), k_range=G_moire/2,)
+                            E_range=(0.0, 3.0), k_range=G_moire/2,)
