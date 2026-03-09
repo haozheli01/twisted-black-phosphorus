@@ -535,7 +535,7 @@ class TwistedBPModel:
 # ============================================================
 
 def cal_bands(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0.5,
-              n_points=100, y_lim=(-2, 1.5), save_prefix=""):
+              n_points=100, y_lim=(-2, 1.5)):
     """Calculate and plot band structure along X -> Gamma -> Y."""
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom,
                            twist_angle=twist_angle, scale_factor=scale_factor)
@@ -565,14 +565,14 @@ def cal_bands(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0.5,
     n = H.shape[-1]
 
     print(f"  dim_H = {n}")
+    print('  Ref Band gap ≈ ',1.838-np.cos(np.pi/(int(n/4)+1))*2*0.712)
     print(f"  Band gap ≈ {np.min(evals[:, n//2] - evals[:, n//2 - 1]):.4f} eV")
 
-    plot_2D_bands(k_dist, evals, sym_pos, sym_labels, y_lim,
-                  suffix=f"TB_{save_prefix}")
+    plot_2D_bands(k_dist, evals, sym_pos, sym_labels, y_lim)
     return model
 
 
-def plot_2D_bands(k_dist, energies, sym_pos, sym_labels, y_lim, suffix=""):
+def plot_2D_bands(k_dist, energies, sym_pos, sym_labels, y_lim):
     """Plot band structure."""
     plt.figure(figsize=(8, 8))
     plt.plot(k_dist, energies[:, 0], 'b-', lw=2.5, alpha=0.5, label='TB Bands')
@@ -586,16 +586,14 @@ def plot_2D_bands(k_dist, energies, sym_pos, sym_labels, y_lim, suffix=""):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f"TB_{suffix}.png", dpi=200)
+    plt.savefig(f"TB_bands.png", dpi=200)
     plt.close()
-    print(f"  Saved TB_{suffix}.png")
 
 
 def plot_3d_bands(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0.5,
-                  k_range=0.2, n_grid=40, bands_to_plot=4,
-                  view_elev=30, view_azim=45, save_prefix=""):
+                  n_grid=40, bands_to_plot=4, k_range=0.15,
+                  view_elev=30, view_azim=45):
     """Plot 3D band structure surface on a 2D k-grid."""
-    print(f"Generating 3D band plot with range [{-k_range}, {k_range}]...")
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom,
                            twist_angle=twist_angle, scale_factor=scale_factor)
 
@@ -628,7 +626,7 @@ def plot_3d_bands(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0.5,
     ax.set_box_aspect((1, 1, 1.5))
     ax.view_init(elev=view_elev, azim=view_azim)
 
-    fname = f"TB_3D_{save_prefix}.png"
+    fname = f"TB_3D.png"
     plt.tight_layout()
     plt.savefig(fname, dpi=300)
     plt.close()
@@ -636,8 +634,8 @@ def plot_3d_bands(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0.5,
 
 
 def calculate_optical_conductivity(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0.5,
-                                   E_range=(0.0, 2.0), n_E=500, eta=0.010,
-                                   k_range=0.15, n_k=60, save_prefix=""):
+                                   E_range=(0.0, 2.0), n_E=500, eta=0.010, k_range=0.15,
+                                   n_k=60):
     """
     Calculate interband optical absorption spectrum using velocity matrix elements.
     See kp.py docstring for the underlying Kubo-Greenwood formula.
@@ -702,15 +700,14 @@ def calculate_optical_conductivity(N_top=4, N_bottom=4, twist_angle=0.0, scale_f
     plt.grid(True, alpha=0.3)
     plt.xlim(E_range)
 
-    fname = f"TB_Abs_{save_prefix}.png"
+    fname = f"TB_Absorption.png"
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"  Saved {fname}")
 
 
 def plot_transition_matrix_elements(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0.5,
-                                    band_indices=None,
-                                    k_range=0.15, n_k=60, save_prefix=""):
+                                    band_indices=None, n_k=60, k_range=0.15):
     """Plot |<j|v|i>|^2 contour maps in k-space."""
     print("Calculating transition matrix elements map (TB)...")
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom,
@@ -759,129 +756,131 @@ def plot_transition_matrix_elements(N_top=4, N_bottom=4, twist_angle=0.0, scale_
     plt.suptitle(f"TB Matrix Elements: Band {band_i} -> {band_j}")
     plt.tight_layout()
 
-    fname = f"TB_M_B{band_i}-{band_j}_{save_prefix}.png"
+    fname = f"TB_M_B{band_i}-{band_j}.png"
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"  Saved {fname}")
 
 
 def calculate_shift_current(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0.5,
-                            E_range=(0.0, 2.0), n_E=400, eta=0.010,
-                            k_range=0.15, n_k=60, comp=('x', 'y', 'y'),
-                            band_window=None, save_prefix="", model=None):
+                            E_range=(0.0, 4.0), n_E=400, eta=0.050, k_range=0.15,
+                            n_k=60, band_window=None):
     r"""
     Shift current sigma^{abc}(omega) via gauge-invariant Sum-Over-States method.
     Ref: Phys. Rev. B 61, 5337 (2000)
     """
-    a_dir, b_dir, c_dir = comp
-    print(f"Calculating shift current sigma^{{{a_dir}{b_dir}{c_dir}}}(omega) "
-          f"(TB, n_k={n_k}, eta={eta*1000:.0f} meV)...")
-
-    if model is None:
-        model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom,
-                               twist_angle=twist_angle, scale_factor=scale_factor)
-
-    kx = np.linspace(-k_range, k_range, n_k)
-    ky = np.linspace(-k_range, k_range, n_k)
-    KX, KY = np.meshgrid(kx, ky)
-    k_points = np.column_stack([KX.flatten(), KY.flatten()])
-    Nk = len(k_points)
-
-    H_stack = model.get_hamiltonians(k_points)
-    evals, evecs = np.linalg.eigh(H_stack)
-    Nb = evals.shape[1]
-
-    vx_orb, vy_orb = model.get_velocity_matrices(k_points)
-    w_xx, w_yy, w_xy = model.get_generalized_derivative_matrices(k_points)
-
-    U = evecs
-    U_dag = np.conj(np.transpose(U, (0, 2, 1)))
-
-    def to_eig(O):
-        return U_dag @ O @ U
-
-    v_map = {'x': to_eig(vx_orb), 'y': to_eig(vy_orb)}
-    w_map = {'xx': to_eig(w_xx), 'yy': to_eig(w_yy),
-             'xy': to_eig(w_xy), 'yx': to_eig(w_xy)}
-
-    v_a = v_map[a_dir];  v_b = v_map[b_dir];  v_c = v_map[c_dir]
-    w_ac = w_map[a_dir + c_dir]
-
-    mid = Nb // 2
-    if band_window is None:
-        v_idx = list(range(0, mid))
-        c_idx = list(range(mid, Nb))
-    else:
-        v_idx = list(range(band_window[0], band_window[1] + 1))
-        c_idx = list(range(band_window[2], band_window[3] + 1))
-
-    omegas = np.linspace(E_range[0], E_range[1], n_E)
-    sigma = np.zeros_like(omegas)
-
-    print(f"  Transitions: {len(v_idx)} val x {len(c_idx)} cond, Nk={Nk}")
-    eps_denom = 1e-5
-
-    for n in v_idx:
-        for m in c_idx:
-            w_mn = evals[:, m] - evals[:, n]
-            nonzero = w_mn > eps_denom
-
-            f_n = 1.0 if n < mid else 0.0
-            f_m = 1.0 if m < mid else 0.0
-            f_nm = f_n - f_m
-            if f_nm == 0.0:
-                continue
-
-            r_b_mn = np.zeros(Nk, dtype=np.complex128)
-            r_b_mn[nonzero] = v_b[nonzero, m, n] / (1j * w_mn[nonzero])
-
-            # Term A
-            termA = np.zeros(Nk, dtype=np.complex128)
-            delta_a = v_a[nonzero, n, n] - v_a[nonzero, m, m]
-            delta_c = v_c[nonzero, n, n] - v_c[nonzero, m, m]
-            termA[nonzero] = (v_c[nonzero, n, m] * delta_a
-                            + v_a[nonzero, n, m] * delta_c) / (-w_mn[nonzero])
-
-            # Term B
-            w_np = evals[:, n, None] - evals
-            w_pm = evals - evals[:, m, None]
-            valid_p = (np.abs(w_np) > eps_denom) & (np.abs(w_pm) > eps_denom)
-            valid_p[:, n] = False;  valid_p[:, m] = False
-            valid_p &= nonzero[:, None]
-
-            num1 = v_c[:, n, :] * v_a[:, :, m]
-            num2 = v_a[:, n, :] * v_c[:, :, m]
-            termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
-            termB_contrib[valid_p] = (num1[valid_p] / w_pm[valid_p]
-                                    - num2[valid_p] / w_np[valid_p])
-            termB = np.sum(termB_contrib, axis=1)
-
-            # Term C
-            termC = -w_ac[:, n, m]
-
-            K_nm = termA + termB + termC
-            r_deriv = np.zeros(Nk, dtype=np.complex128)
-            r_deriv[nonzero] = K_nm[nonzero] / (-1j * (-w_mn[nonzero]))
-
-            weight = f_nm * np.imag(r_b_mn * r_deriv)
-            diff = omegas[:, None] - w_mn[None, :]
-            lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
-            sigma += np.sum(lorentz * weight[None, :], axis=1)
-
-    sigma /= Nk
-
-    # Physical prefactor: sigma has units of Å² so far (from velocity = dH/dk in eV·Å).
-    # Full formula: sigma^{abc} = (2*pi*e^2) / (hbar * A_uc) * I(omega)
-    # with an extra 1/hbar absorbed into the Lorentzian (delta in 1/eV → 1/(eV·s^{-1}))
-    e_charge = 1.602176634e-19   # C
-    hbar = 1.054571817e-34       # J·s
-    A_uc = model.a_lat * model.b_lat  # Å² (orthorhombic unit cell)
-    prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6  # → μA·Å / V²
-    sigma *= prefactor
-
+    comp_list=[('x', 'x', 'x'), ('x', 'y', 'y'), ('y', 'x', 'x'), ('y', 'y', 'y')]
     plt.figure(figsize=(8, 6))
-    plt.plot(omegas, sigma, 'r-', lw=2,
-             label=fr'$\sigma^{{{a_dir}{b_dir}{c_dir}}}(\omega)$')
+
+    for comp in comp_list:
+        a_dir, b_dir, c_dir = comp
+        print(f"Calculating shift current sigma^{{{a_dir}{b_dir}{c_dir}}}(omega) "
+            f"(TB, n_k={n_k}, eta={eta*1000:.0f} meV)...")
+
+        model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom,
+                            twist_angle=twist_angle, scale_factor=scale_factor)
+
+        kx = np.linspace(-k_range, k_range, n_k)
+        ky = np.linspace(-k_range, k_range, n_k)
+        KX, KY = np.meshgrid(kx, ky)
+        k_points = np.column_stack([KX.flatten(), KY.flatten()])
+        Nk = len(k_points)
+
+        H_stack = model.get_hamiltonians(k_points)
+        evals, evecs = np.linalg.eigh(H_stack)
+        Nb = evals.shape[1]
+
+        vx_orb, vy_orb = model.get_velocity_matrices(k_points)
+        w_xx, w_yy, w_xy = model.get_generalized_derivative_matrices(k_points)
+
+        U = evecs
+        U_dag = np.conj(np.transpose(U, (0, 2, 1)))
+
+        def to_eig(O):
+            return U_dag @ O @ U
+
+        v_map = {'x': to_eig(vx_orb), 'y': to_eig(vy_orb)}
+        w_map = {'xx': to_eig(w_xx), 'yy': to_eig(w_yy),
+                'xy': to_eig(w_xy), 'yx': to_eig(w_xy)}
+
+        v_a = v_map[a_dir];  v_b = v_map[b_dir];  v_c = v_map[c_dir]
+        w_ac = w_map[a_dir + c_dir]
+
+        mid = Nb // 2
+        if band_window is None:
+            v_idx = list(range(0, mid))
+            c_idx = list(range(mid, Nb))
+        else:
+            v_idx = list(range(band_window[0], band_window[1] + 1))
+            c_idx = list(range(band_window[2], band_window[3] + 1))
+
+        omegas = np.linspace(E_range[0], E_range[1], n_E)
+        sigma = np.zeros_like(omegas)
+
+        print(f"  Transitions: {len(v_idx)} val x {len(c_idx)} cond, Nk={Nk}")
+        eps_denom = 1e-5
+
+        for n in v_idx:
+            for m in c_idx:
+                w_mn = evals[:, m] - evals[:, n]
+                nonzero = w_mn > eps_denom
+
+                f_n = 1.0 if n < mid else 0.0
+                f_m = 1.0 if m < mid else 0.0
+                f_nm = f_n - f_m
+                if f_nm == 0.0:
+                    continue
+
+                r_b_mn = np.zeros(Nk, dtype=np.complex128)
+                r_b_mn[nonzero] = v_b[nonzero, m, n] / (1j * w_mn[nonzero])
+
+                # Term A
+                termA = np.zeros(Nk, dtype=np.complex128)
+                delta_a = v_a[nonzero, n, n] - v_a[nonzero, m, m]
+                delta_c = v_c[nonzero, n, n] - v_c[nonzero, m, m]
+                termA[nonzero] = (v_c[nonzero, n, m] * delta_a
+                                + v_a[nonzero, n, m] * delta_c) / (-w_mn[nonzero])
+
+                # Term B
+                w_np = evals[:, n, None] - evals
+                w_pm = evals - evals[:, m, None]
+                valid_p = (np.abs(w_np) > eps_denom) & (np.abs(w_pm) > eps_denom)
+                valid_p[:, n] = False;  valid_p[:, m] = False
+                valid_p &= nonzero[:, None]
+
+                num1 = v_c[:, n, :] * v_a[:, :, m]
+                num2 = v_a[:, n, :] * v_c[:, :, m]
+                termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
+                termB_contrib[valid_p] = (num1[valid_p] / w_pm[valid_p]
+                                        - num2[valid_p] / w_np[valid_p])
+                termB = np.sum(termB_contrib, axis=1)
+
+                # Term C
+                termC = -w_ac[:, n, m]
+
+                K_nm = termA + termB + termC
+                r_deriv = np.zeros(Nk, dtype=np.complex128)
+                r_deriv[nonzero] = K_nm[nonzero] / (-1j * (-w_mn[nonzero]))
+
+                weight = f_nm * np.imag(r_b_mn * r_deriv)
+                diff = omegas[:, None] - w_mn[None, :]
+                lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+                sigma += np.sum(lorentz * weight[None, :], axis=1)
+
+        sigma /= Nk
+
+        # Physical prefactor: sigma has units of Å² so far (from velocity = dH/dk in eV·Å).
+        # Full formula: sigma^{abc} = (2*pi*e^2) / (hbar * A_uc) * I(omega)
+        # with an extra 1/hbar absorbed into the Lorentzian (delta in 1/eV → 1/(eV·s^{-1}))
+        e_charge = 1.602176634e-19   # C
+        hbar = 1.054571817e-34       # J·s
+        A_uc = model.a_lat * model.b_lat  # Å² (orthorhombic unit cell)
+        prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6  # → μA·Å / V²
+        sigma *= prefactor
+
+        plt.plot(omegas, sigma, lw=2,
+                label=fr'$\sigma^{{{a_dir}{b_dir}{c_dir}}}(\omega)$')
+
     plt.axhline(0, color='k', lw=0.5, ls='--')
     plt.xlabel('Photon Energy (eV)')
     plt.ylabel(r'Shift Conductivity ($\mu$A$\cdot$Å/V$^2$)')
@@ -890,7 +889,7 @@ def calculate_shift_current(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0
     plt.grid(True, alpha=0.3)
     plt.xlim(E_range)
 
-    fname = f"TB_SC_{a_dir}{b_dir}{c_dir}_{save_prefix}.png"
+    fname = f"TB_SC.png"
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"  Saved {fname}")
@@ -898,33 +897,30 @@ def calculate_shift_current(N_top=4, N_bottom=4, twist_angle=0.0, scale_factor=0
 
 
 if __name__ == "__main__":
+
+    # BP parameters
+    b_lat=4.588
+    a_lat=3.296
+    G_moire = 2 * np.pi * np.abs(1/b_lat - 1/a_lat) # Moiré G vector magnitude for real lattice
+
     # Band structure
-    cal_bands(N_top=4, N_bottom=3, twist_angle=np.pi/2, scale_factor=0.05,
-              n_points=100, y_lim=(-2, 1.5))
+    cal_bands(N_top=1, N_bottom=1, twist_angle=np.pi/2, scale_factor=0.05,
+              n_points=100, y_lim=(-10, 10))
 
     # 3D band structure
-    plot_3d_bands(N_top=4, N_bottom=3, twist_angle=np.pi/2, scale_factor=0.05,
-                  k_range=0.5, n_grid=60, bands_to_plot=4)
+    plot_3d_bands(N_top=1, N_bottom=1, twist_angle=np.pi/2, scale_factor=0.05,
+                  n_grid=60, bands_to_plot=4, k_range=G_moire/2)
 
     # Optical conductivity
-    calculate_optical_conductivity(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                                   scale_factor=0.05, n_k=60, n_E=500,
-                                   eta=0.010, k_range=0.5, E_range=(0.0, 2.0))
+    calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=np.pi/2,
+                                   scale_factor=0.05, n_k=200, n_E=500,
+                                   eta=0.050, E_range=(0.0, 4.0), k_range=G_moire/2)
 
     # Transition matrix elements
-    plot_transition_matrix_elements(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                                    scale_factor=0.05, k_range=0.5, n_k=60)
+    plot_transition_matrix_elements(N_top=1, N_bottom=1, twist_angle=np.pi/2,
+                                    scale_factor=0.05, n_k=120, k_range=G_moire/2)
 
     # Shift current
-    calculate_shift_current(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                            scale_factor=0.05, n_k=100, n_E=400,
-                            comp=('y', 'x', 'x'), E_range=(0.0, 2.0))
-    calculate_shift_current(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                            scale_factor=0.05, n_k=100, n_E=400,
-                            comp=('y', 'y', 'y'), E_range=(0.0, 2.0))
-    calculate_shift_current(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                            scale_factor=0.05, n_k=100, n_E=400,
-                            comp=('x', 'x', 'x'), E_range=(0.0, 2.0))
-    calculate_shift_current(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                            scale_factor=0.05, n_k=100, n_E=400,
-                            comp=('x', 'y', 'y'), E_range=(0.0, 2.0))
+    calculate_shift_current(N_top=1, N_bottom=1, twist_angle=np.pi/2,
+                            scale_factor=0.05, n_k=300, n_E=400,
+                            eta=0.010, E_range=(0.0, 4.0), k_range=G_moire/2)

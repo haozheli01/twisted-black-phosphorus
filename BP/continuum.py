@@ -4,32 +4,12 @@ import matplotlib as mpl
 mpl.rcParams['font.family'] = 'Arial'
 
 class TwistedBPModel:
-    def __init__(self, N_shell=1, E_field=0.0, 
-                 a_lat=4.588, b_lat=3.296,
-
-                # # Best fit parameters for 341 supercell, different from unitcell's parameters
-                #  gamma_C=0.224, gamma_V=0.06,
-                #  e_C0=0.224 + 0.615, e_V0=0.224 -0.853 + 0.615,
-                #  gamma_ML=3.450, beta_ML=0.00, 
-                #  alpha_Cx=1.100, alpha_Vx=-3.600,
-                #  alpha_Cy=2.800, alpha_Vy=-1.800,
-                #  d_dist=0.54
-
-                # # Parameters for 571 supercell, from Ref: 2D Mater. 4 (2017) 035025
-                 gamma_C=0.33, gamma_V=0.07,
-                 e_C0=0.33 + 0.579, e_V0=0.33 -0.927 + 0.579,
-                 gamma_ML=4.50, beta_ML=0.00, 
-                 alpha_Cx=1.20, alpha_Vx=-5.90,
-                 alpha_Cy=2.70, alpha_Vy=-2.00,
-                 d_dist=0.54
-
-                # # Best fit parameters for 571 supercell, different from unitcell's parameters
-                #  gamma_C=0.30, gamma_V=0.065,
-                #  e_C0=0.30 + 0.579, e_V0=0.30 -0.897 + 0.579,
-                #  gamma_ML=4.50, beta_ML=0.00, 
-                #  alpha_Cx=1.500, alpha_Vx=-4.900,
-                #  alpha_Cy=2.800, alpha_Vy=-1.800,
-                #  d_dist=0.54
+    def __init__(self, N_shell=1, E_field=0.0, d_dist=0.54,
+                 a_lat=3.296, b_lat=4.588,
+                 u0 = -0.414, delta=0.919, kai=5.896,
+                 etax = 1.265, etay = -1.384,
+                 gamma_x = 2.510, gamma_y = 2.035,
+                 gamma_C=0.39, gamma_V=0.07,
                  ):
         """
         Initialize TwistedBPModel with configurable parameters.
@@ -37,14 +17,15 @@ class TwistedBPModel:
         # Parameters
         self.a_lat, self.b_lat = a_lat, b_lat # lattice constants in Angstrom for BP
         self.delta_g_val = 2 * np.pi * np.abs(1/b_lat - 1/a_lat) # Moire G vector magnitude for real lattice
-        self.gamma_ML, self.beta_ML = gamma_ML, beta_ML # intralayer coupling parameters in eV of monolayer BP
-        self.gamma_C, self.gamma_V =  gamma_C, gamma_V # interlayer coupling parameters in eV
-        self.e_C0, self.e_V0 = e_C0, e_V0 # band edge energies in eV, using monolayer values
-        self.alpha_Cx, self.alpha_Cy = alpha_Cx, alpha_Cy # effective mass parameters in eV*A^2
-        self.alpha_Vx, self.alpha_Vy = alpha_Vx, alpha_Vy # effective mass parameters in eV*A^2
         self.d_dist = d_dist # effective parameter for electric field influence in bandgap in Angstrom
         self.E_field = E_field # Electric field in eV/A, seemly opposite with physical direction
         self.N_shell = N_shell # Number of G shells to include
+
+        # Tight-binding parameters (from fitting to DFT)
+        self.u0, self.delta, self.kai = u0, delta, kai
+        self.gamma_x, self.gamma_y =  gamma_x, gamma_y
+        self.gamma_C, self.gamma_V =  gamma_C, gamma_V # interlayer coupling parameters in eV
+        self.etax, self.etay = etax, etay
 
         # Initialize Grid
         self._init_grid()
@@ -98,11 +79,8 @@ class TwistedBPModel:
         
         rows, cols = np.where(mask)
 
-        # # [CRITICAL FIX] Add complex phase to break Real-Hamiltonian symmetry
-        # # This physically corresponds to a stacking shift r0.
-        # # Without this, H is real => Berry Curvature is 0 => Shift Current is 0.
         delta_g = self.G_vectors[rows] - self.G_vectors[cols]
-        r0 = np.array([self.b_lat / 2, 0.0]) # Arbitrary shift approx 0.2 unit cells
+        r0 = np.array([0.0, 0.0]) # reference point for phase, can be set to (0,0) for simplicity since only relative phases matter
         phase = np.exp(1j * np.dot(delta_g, r0))
         
         H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V * phase
@@ -112,7 +90,7 @@ class TwistedBPModel:
         # H[cols * 4 + 3, rows * 4 + 1] = self.gamma_V
         
         return H
-
+    
     def get_hamiltonians(self, k_points):
         """
         Vectorized Hamiltonian constructor.
@@ -145,15 +123,15 @@ class TwistedBPModel:
         
         # --- Layer 1 (Top) ---
         # Parameters
-        val_Tc = self.e_C0 + u_pot + self.alpha_Cx * p2_x + self.alpha_Cy * p2_y
-        val_Tv = self.e_V0 + u_pot + self.alpha_Vx * p2_x + self.alpha_Vy * p2_y
-        val_T_mix = self.gamma_ML * kx + self.beta_ML * ky**2
+        val_Tc = self.u0 + u_pot + self.etax * p2_x + self.etay * p2_y
+        val_Tv = self.u0 + u_pot + self.etax * p2_x + self.etay * p2_y
+        val_T_mix = self.delta + self.gamma_x * p2_x + self.gamma_y * p2_y + 1j * self.kai * ky
         
         # --- Layer 2 (Bottom) ---
-        # Rotated 90 deg: alpha_x <-> alpha_y, p_x -> -p_y
-        val_Bc = self.e_C0 - u_pot + self.alpha_Cx * p2_y + self.alpha_Cy * p2_x
-        val_Bv = self.e_V0 - u_pot + self.alpha_Vx * p2_y + self.alpha_Vy * p2_x
-        val_B_mix = self.gamma_ML * (-ky) + self.beta_ML * kx**2
+        # Rotated 90 deg: p_x -> -p_y, p_y -> p_x
+        val_Bc = self.u0 - u_pot + self.etax * p2_y + self.etay * p2_x
+        val_Bv = self.u0 - u_pot + self.etax * p2_y + self.etay * p2_x
+        val_B_mix = self.delta + self.gamma_x * p2_y + self.gamma_y * p2_x + 1j * self.kai * kx
         
         # Assign to diagonal blocks for all G at once
         # Indices array (Ng,) to broadcast with (Nk, Ng)
@@ -167,10 +145,10 @@ class TwistedBPModel:
         
         # Intra-layer mixing (Real)
         H_stack[:, r*4+0, r*4+1] += val_T_mix
-        H_stack[:, r*4+1, r*4+0] += val_T_mix
+        H_stack[:, r*4+1, r*4+0] += val_T_mix.conj()
         
         H_stack[:, r*4+2, r*4+3] += val_B_mix
-        H_stack[:, r*4+3, r*4+2] += val_B_mix
+        H_stack[:, r*4+3, r*4+2] += val_B_mix.conj()
         
         return H_stack
 
@@ -196,44 +174,41 @@ class TwistedBPModel:
         
         # --- Top Layer (alpha_x, alpha_y along x, y) ---
         # dH/dkx
-        # H_00 (Tc): alpha_Cx * kx^2 -> 2 * alpha_Cx * kx
-        vx_stack[:, r*4+0, r*4+0] = 2 * self.alpha_Cx * kx
-        # H_11 (Tv): alpha_Vx * kx^2 -> 2 * alpha_Vx * kx
-        vx_stack[:, r*4+1, r*4+1] = 2 * self.alpha_Vx * kx
-        # H_01/10 (Mix): gamma_ML * kx -> gamma_ML
-        vx_stack[:, r*4+0, r*4+1] = self.gamma_ML
-        vx_stack[:, r*4+1, r*4+0] = self.gamma_ML
+        # H_00 (Tc): 
+        vx_stack[:, r*4+0, r*4+0] = 2 * self.etax * kx
+        # H_11 (Tv): 
+        vx_stack[:, r*4+1, r*4+1] = 2 * self.etax * kx
+        # H_01/10 (Mix):
+        vx_stack[:, r*4+0, r*4+1] = 2 * self.gamma_x * kx + 1j * self.kai * 0
+        vx_stack[:, r*4+1, r*4+0] = 2 * self.gamma_x * kx - 1j * self.kai * 0
         
         # dH/dky
-        # H_00 (Tc): alpha_Cy * ky^2 -> 2 * alpha_Cy * ky
-        vy_stack[:, r*4+0, r*4+0] = 2 * self.alpha_Cy * ky
-        # H_11 (Tv): alpha_Vy * ky^2 -> 2 * alpha_Vy * ky
-        vy_stack[:, r*4+1, r*4+1] = 2 * self.alpha_Vy * ky
+        # H_00 (Tc): 
+        vy_stack[:, r*4+0, r*4+0] = 2 * self.etay * ky
+        # H_11 (Tv): 
+        vy_stack[:, r*4+1, r*4+1] = 2 * self.etay * ky
         # Mixing term in y
-        vy_stack[:, r*4+0, r*4+1] = 2 * self.beta_ML * ky
-        vy_stack[:, r*4+1, r*4+0] = 2 * self.beta_ML * ky
-        
+        vy_stack[:, r*4+0, r*4+1] = 2 * self.gamma_y * ky + 1j * self.kai
+        vy_stack[:, r*4+1, r*4+0] = 2 * self.gamma_y * ky - 1j * self.kai
+
         # --- Bottom Layer (Rotated: params swapped effectively) ---
-        # H_BB uses alpha_Cx*p_y^2 + alpha_Cy*p_x^2
-        # where p_x = kx, p_y = ky
-        
-        # dH/dkx (Only terms with kx)
-        # H_22 (Bc): alpha_Cy * kx^2 -> 2 * alpha_Cy * kx
-        vx_stack[:, r*4+2, r*4+2] = 2 * self.alpha_Cy * kx
-        # H_33 (Bv): alpha_Vy * kx^2 -> 2 * alpha_Vy * kx
-        vx_stack[:, r*4+3, r*4+3] = 2 * self.alpha_Vy * kx
+        # dH/dkx
+        # H_22 (Bc):
+        vx_stack[:, r*4+2, r*4+2] = 2 * self.etay * kx
+        # H_33 (Bv):
+        vx_stack[:, r*4+3, r*4+3] = 2 * self.etay * kx
         # Mixing
-        vx_stack[:, r*4+2, r*4+3] = 2 * self.beta_ML * kx
-        vx_stack[:, r*4+3, r*4+2] = 2 * self.beta_ML * kx
+        vx_stack[:, r*4+2, r*4+3] = 2 * self.gamma_y * kx + 1j * self.kai
+        vx_stack[:, r*4+3, r*4+2] = 2 * self.gamma_y * kx - 1j * self.kai
         
-        # dH/dky (Only terms with ky)
-        # H_22 (Bc): alpha_Cx * ky^2 -> 2 * alpha_Cx * ky
-        vy_stack[:, r*4+2, r*4+2] = 2 * self.alpha_Cx * ky
-        # H_33 (Bv): alpha_Vx * ky^2 -> 2 * alpha_Vx * ky
-        vy_stack[:, r*4+3, r*4+3] = 2 * self.alpha_Vx * ky
-        # Mixing: gamma_ML * (-ky) -> -gamma_ML
-        vy_stack[:, r*4+2, r*4+3] = -self.gamma_ML
-        vy_stack[:, r*4+3, r*4+2] = -self.gamma_ML
+        # dH/dky
+        # H_22 (Bc):
+        vy_stack[:, r*4+2, r*4+2] = 2 * self.etax * ky
+        # H_33 (Bv): 
+        vy_stack[:, r*4+3, r*4+3] = 2 * self.etax * ky
+        # Mixing: 
+        vy_stack[:, r*4+2, r*4+3] = 2 * self.gamma_x * ky + 1j * self.kai * 0
+        vy_stack[:, r*4+3, r*4+2] = 2 * self.gamma_x * ky - 1j * self.kai * 0
         
         return vx_stack, vy_stack
 
@@ -253,32 +228,36 @@ class TwistedBPModel:
         r = np.arange(self.dim_G)
         
         # --- Top Layer ---
-        # Tc(0): alpha_Cx * kx^2 + alpha_Cy * ky^2 => d^2/dx^2 = 2*alpha_Cx
-        w_xx[:, r*4+0, r*4+0] = 2 * self.alpha_Cx
-        w_yy[:, r*4+0, r*4+0] = 2 * self.alpha_Cy
+        # Tc(0): 
+        w_xx[:, r*4+0, r*4+0] = 2 * self.etax
+        w_yy[:, r*4+0, r*4+0] = 2 * self.etay
         
         # Tv(1)
-        w_xx[:, r*4+1, r*4+1] = 2 * self.alpha_Vx
-        w_yy[:, r*4+1, r*4+1] = 2 * self.alpha_Vy
+        w_xx[:, r*4+1, r*4+1] = 2 * self.etax
+        w_yy[:, r*4+1, r*4+1] = 2 * self.etay
         
         # --- Bottom Layer (Rotated 90 deg: alpha_x <-> alpha_y) ---
         # Bc(2)
-        w_xx[:, r*4+2, r*4+2] = 2 * self.alpha_Cy
-        w_yy[:, r*4+2, r*4+2] = 2 * self.alpha_Cx
+        w_xx[:, r*4+2, r*4+2] = 2 * self.etay
+        w_yy[:, r*4+2, r*4+2] = 2 * self.etax
         
         # Bv(3)
-        w_xx[:, r*4+3, r*4+3] = 2 * self.alpha_Vy
-        w_yy[:, r*4+3, r*4+3] = 2 * self.alpha_Vx
+        w_xx[:, r*4+3, r*4+3] = 2 * self.etay
+        w_yy[:, r*4+3, r*4+3] = 2 * self.etax
         
         # --- Mixing Terms ---
-        # Top Mixing (0-1): gamma*kx + beta*ky^2 => w_yy = 2*beta
-        w_yy[:, r*4+0, r*4+1] = 2 * self.beta_ML
-        w_yy[:, r*4+1, r*4+0] = 2 * self.beta_ML
-        
-        # Bottom Mixing (2-3): -gamma*ky + beta*kx^2 => w_xx = 2*beta
-        w_xx[:, r*4+2, r*4+3] = 2 * self.beta_ML
-        w_xx[:, r*4+3, r*4+2] = 2 * self.beta_ML
-        
+        # Top Mixing (0-1): 
+        w_xx[:, r*4+0, r*4+1] = 2 * self.gamma_x
+        w_xx[:, r*4+1, r*4+0] = 2 * self.gamma_x
+        w_yy[:, r*4+0, r*4+1] = 2 * self.gamma_y
+        w_yy[:, r*4+1, r*4+0] = 2 * self.gamma_y
+
+        # Bottom Mixing (2-3): 
+        w_xx[:, r*4+2, r*4+3] = 2 * self.gamma_y
+        w_xx[:, r*4+3, r*4+2] = 2 * self.gamma_y
+        w_yy[:, r*4+2, r*4+3] = 2 * self.gamma_x
+        w_yy[:, r*4+3, r*4+2] = 2 * self.gamma_x
+
         return w_xx, w_yy, w_xy
 
 def cal_bands(N_shell=1, E_field=0.0, k_fine_steps=360, 
@@ -399,8 +378,11 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
 
     # Vectorized plotting of lines is faster than loop but mpl handles loop ok.
     # Plotting first band with label
-    plt.plot(k_dist, unfolded_E[:, 0], 'b-', lw=2.5, alpha=0.5, label='Unfolded Bands')
-    plt.plot(k_dist, unfolded_E[:, 1:], 'b-', lw=2.5, alpha=0.5)
+    nbnd = unfolded_E.shape[-1]
+    vbm = np.max(unfolded_E[:, :nbnd//2]) # Assuming half filling, VBM is max of valence bands
+    
+    plt.plot(k_dist, unfolded_E[:, 0] - vbm, 'b-', lw=2.5, alpha=0.5, label='Unfolded Bands')
+    plt.plot(k_dist, unfolded_E[:, 1:] - vbm, 'b-', lw=2.5, alpha=0.5)
     # plt.scatter(vasp_kpath, vasp_energies, s=20, color='black', alpha=0.8, label='VASP Bands',
     #             facecolors='white', edgecolors='black', linewidths=1.6)
     for pos in sym_pos:
@@ -430,7 +412,7 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
     folded_sym_pos = [0.0, k_boundary, 2*k_boundary]
     folded_sym_labels = [r"$X'$", r'$\Gamma$', r"$Y'$"]
     
-    plt.scatter(folded_k, folded_E, s=20, color='red', alpha=0.9, label='Folded Bands',
+    plt.scatter(folded_k, folded_E - vbm, s=20, color='red', alpha=0.9, label='Folded Bands',
                 facecolors='white', edgecolors='red', linewidths=0.5, zorder=0)
     
     for pos in folded_sym_pos:
@@ -825,142 +807,128 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
         band_window : (v_start, v_end, c_start, c_end) or None
         model : optional pre-built TwistedBPModel
     """
-
-    a_dir, b_dir, c_dir = comp
-    print(f"Calculating shift current sigma^{{{a_dir}{b_dir}{c_dir}}}(omega) "
-          f"(n_k={n_k}, η={eta*1000:.0f} meV)...")
-
-    if model is None:
-        model = TwistedBPModel(N_shell=N_shell, E_field=E_field)
-    
-    # 1. Generate Grid
-    kx = np.linspace(-k_range, k_range, n_k)
-    ky = np.linspace(-k_range, k_range, n_k)
-    KX, KY = np.meshgrid(kx, ky)
-    k_points = np.column_stack([KX.flatten(), KY.flatten()])
-    Nk = len(k_points)
-
-    # Diagonalize + velocity (same structure as hBN optical routine)
-    H_stack = model.get_hamiltonians(k_points)
-    evals, evecs = np.linalg.eigh(H_stack) 
-    Nb = evals.shape[1]
-
-    # Velocity / generalized derivative in orbital basis
-    vx_orb, vy_orb = model.get_velocity_matrices(k_points)
-    w_xx, w_yy, w_xy = model.get_generalized_derivative_matrices(k_points)
-    
-    # Velocity in eigenbasis
-    U = evecs
-    U_dag = np.conj(np.transpose(U, (0, 2, 1)))
-
-    def to_eig(O):
-        return U_dag @ O @ U
-
-    # Store component maps
-    v_map = {'x': to_eig(vx_orb), 'y': to_eig(vy_orb)}
-    w_map = {'xx': to_eig(w_xx), 'yy': to_eig(w_yy), 'xy': to_eig(w_xy), 'yx': to_eig(w_xy)}
-
-    v_a = v_map[a_dir]
-    v_b = v_map[b_dir]
-    v_c = v_map[c_dir]
-    w_ac_key = a_dir + c_dir
-    w_ac = w_map[w_ac_key]
-
-    # Band selection
-    mid = Nb // 2
-    if band_window is None:
-        v_idx = list(range(0, mid))
-        c_idx = list(range(mid, Nb))
-    else:
-        v_idx = list(range(band_window[0], band_window[1]+1))
-        c_idx = list(range(band_window[2], band_window[3]+1))
-
-    # Spectrum
-    omegas = np.linspace(E_range[0], E_range[1], n_E)
-    sigma = np.zeros_like(omegas)
-    
-    print(f"  Transitions: {len(v_idx)} val x {len(c_idx)} cond, Nk={Nk}")
-    
-    eps_denom = 1e-5
-
-    for n in v_idx:
-        for m in c_idx:
-            w_mn = evals[:, m] - evals[:, n]  # (Nk,), > 0 for insulator
-            nonzero = w_mn > eps_denom
-            
-            f_n = 1.0 if n < mid else 0.0
-            f_m = 1.0 if m < mid else 0.0
-            f_nm = f_n - f_m
-
-            if f_nm == 0.0:
-                continue
-            
-            # --- r^b_mn = v^b_{mn} / (i ω_mn) ---
-            r_b_mn = np.zeros(Nk, dtype=np.complex128)
-            r_b_mn[nonzero] = v_b[nonzero, m, n] / (1j * w_mn[nonzero])
-            
-            # --- Term A: intraband velocity differences ---
-            termA = np.zeros(Nk, dtype=np.complex128)
-            delta_a = v_a[nonzero, n, n] - v_a[nonzero, m, m]
-            delta_c = v_c[nonzero, n, n] - v_c[nonzero, m, m]
-            termA[nonzero] = (
-                v_c[nonzero, n, m] * delta_a
-                + v_a[nonzero, n, m] * delta_c
-            )
-            termA[nonzero] /= (-w_mn[nonzero])
-            
-            # --- Term B: sum over intermediate states (vectorized over p) ---
-            w_np = evals[:, n, None] - evals            # (Nk, Nb)
-            w_pm = evals - evals[:, m, None]            # (Nk, Nb)
-
-            valid_p = (np.abs(w_np) > eps_denom) & (np.abs(w_pm) > eps_denom)
-            valid_p[:, n] = False
-            valid_p[:, m] = False
-            valid_p &= nonzero[:, None]
-
-            num1 = v_c[:, n, :] * v_a[:, :, m]
-            num2 = v_a[:, n, :] * v_c[:, :, m]
-
-            termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
-            termB_contrib[valid_p] = (
-                num1[valid_p] / w_pm[valid_p]
-                - num2[valid_p] / w_np[valid_p]
-            )
-            termB = np.sum(termB_contrib, axis=1)
-
-            # --- Term C: generalized derivative correction ---
-            termC = -w_ac[:, n, m]
-
-            # --- Generalized derivative ---
-            K_nm = termA + termB + termC # important!
-            r_deriv = np.zeros(Nk, dtype=np.complex128)
-            r_deriv[nonzero] = K_nm[nonzero] / (-1j * (-w_mn[nonzero]))
-            
-            # --- Shift current weight ---
-            weight = f_nm * np.imag(r_b_mn * r_deriv)
-            
-            # --- Lorentzian broadening ---
-            diff = omegas[:, None] - w_mn[None, :]       # (n_E, Nk)
-            lorentz = (1.0/np.pi) * eta / (diff**2 + eta**2)
-            
-            # Accumulate
-            sigma += np.sum(lorentz * weight[None, :], axis=1)
-
-    # Normalize by k-point count
-    sigma /= Nk
-
-    # Physical prefactor: sigma has units of Å² so far (from velocity = dH/dk in eV·Å).
-    # Full formula: sigma^{abc} = (2*pi*e^2) / (hbar * A_uc) * I(omega)
-    # with an extra 1/hbar absorbed into the Lorentzian (delta in 1/eV → 1/(eV·s^{-1}))
-    e_charge = 1.602176634e-19   # C
-    hbar = 1.054571817e-34       # J·s
-    A_uc = model.a_lat * model.b_lat  # Å² (orthorhombic unit cell)
-    prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6  # → μA·Å / V²
-    sigma *= prefactor
-
-    # --- Plotting ---
+    comp_list=[('x', 'x', 'x'), ('x', 'y', 'y'), ('y', 'x', 'x'), ('y', 'y', 'y')]
     plt.figure(figsize=(8, 6))
-    plt.plot(omegas, sigma, 'r-', lw=2, label=fr'$\sigma^{{{a_dir}{b_dir}{c_dir}}}(\omega)$')
+
+    for comp in comp_list:
+        a_dir, b_dir, c_dir = comp
+        print(f"Calculating shift current sigma^{{{a_dir}{b_dir}{c_dir}}}(omega) "
+            f"(n_k={n_k}, η={eta*1000:.0f} meV)...")
+
+        if model is None:
+            model = TwistedBPModel(N_shell=N_shell, E_field=E_field)
+        
+        # 1. Generate Grid
+        kx = np.linspace(-k_range, k_range, n_k)
+        ky = np.linspace(-k_range, k_range, n_k)
+        KX, KY = np.meshgrid(kx, ky)
+        k_points = np.column_stack([KX.flatten(), KY.flatten()])
+        Nk = len(k_points)
+
+        # Diagonalize + velocity (same structure as hBN optical routine)
+        H_stack = model.get_hamiltonians(k_points)
+        evals, evecs = np.linalg.eigh(H_stack) 
+        Nb = evals.shape[1]
+
+        # Velocity / generalized derivative in orbital basis
+        vx_orb, vy_orb = model.get_velocity_matrices(k_points)
+        w_xx, w_yy, w_xy = model.get_generalized_derivative_matrices(k_points)
+        
+        # Velocity in eigenbasis
+        U = evecs
+        U_dag = np.conj(np.transpose(U, (0, 2, 1)))
+
+        def to_eig(O):
+            return U_dag @ O @ U
+
+        # Store component maps
+        v_map = {'x': to_eig(vx_orb), 'y': to_eig(vy_orb)}
+        w_map = {'xx': to_eig(w_xx), 'yy': to_eig(w_yy), 'xy': to_eig(w_xy), 'yx': to_eig(w_xy)}
+
+        v_a = v_map[a_dir]
+        v_b = v_map[b_dir]
+        v_c = v_map[c_dir]
+        w_ac_key = a_dir + c_dir
+        w_ac = w_map[w_ac_key]
+
+        # Band selection
+        mid = Nb // 2
+        if band_window is None:
+            v_idx = list(range(0, mid))
+            c_idx = list(range(mid, Nb))
+        else:
+            v_idx = list(range(band_window[0], band_window[1]+1))
+            c_idx = list(range(band_window[2], band_window[3]+1))
+
+        # Spectrum
+        omegas = np.linspace(E_range[0], E_range[1], n_E)
+        sigma = np.zeros_like(omegas)
+        
+        print(f"  Transitions: {len(v_idx)} val x {len(c_idx)} cond, Nk={Nk}")
+        
+        eps_denom = 1e-5
+
+        for n in v_idx:
+            for m in c_idx:
+                w_mn = evals[:, m] - evals[:, n]
+                nonzero = w_mn > eps_denom
+
+                f_n = 1.0 if n < mid else 0.0
+                f_m = 1.0 if m < mid else 0.0
+                f_nm = f_n - f_m
+                if f_nm == 0.0:
+                    continue
+
+                r_b_mn = np.zeros(Nk, dtype=np.complex128)
+                r_b_mn[nonzero] = v_b[nonzero, m, n] / (1j * w_mn[nonzero])
+
+                # Term A
+                termA = np.zeros(Nk, dtype=np.complex128)
+                delta_a = v_a[nonzero, n, n] - v_a[nonzero, m, m]
+                delta_c = v_c[nonzero, n, n] - v_c[nonzero, m, m]
+                termA[nonzero] = (v_c[nonzero, n, m] * delta_a
+                                + v_a[nonzero, n, m] * delta_c) / (-w_mn[nonzero])
+
+                # Term B
+                w_np = evals[:, n, None] - evals
+                w_pm = evals - evals[:, m, None]
+                valid_p = (np.abs(w_np) > eps_denom) & (np.abs(w_pm) > eps_denom)
+                valid_p[:, n] = False;  valid_p[:, m] = False
+                valid_p &= nonzero[:, None]
+
+                num1 = v_c[:, n, :] * v_a[:, :, m]
+                num2 = v_a[:, n, :] * v_c[:, :, m]
+                termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
+                termB_contrib[valid_p] = (num1[valid_p] / w_pm[valid_p]
+                                        - num2[valid_p] / w_np[valid_p])
+                termB = np.sum(termB_contrib, axis=1)
+
+                # Term C
+                termC = -w_ac[:, n, m]
+
+                K_nm = termA + termB + termC
+                r_deriv = np.zeros(Nk, dtype=np.complex128)
+                r_deriv[nonzero] = K_nm[nonzero] / (-1j * (-w_mn[nonzero]))
+
+                weight = f_nm * np.imag(r_b_mn * r_deriv)
+                diff = omegas[:, None] - w_mn[None, :]
+                lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+                sigma += np.sum(lorentz * weight[None, :], axis=1)
+
+        # Normalize by k-point count
+        sigma /= Nk
+
+        # Physical prefactor: sigma has units of Å² so far (from velocity = dH/dk in eV·Å).
+        # Full formula: sigma^{abc} = (2*pi*e^2) / (hbar * A_uc) * I(omega)
+        # with an extra 1/hbar absorbed into the Lorentzian (delta in 1/eV → 1/(eV·s^{-1}))
+        e_charge = 1.602176634e-19   # C
+        hbar = 1.054571817e-34       # J·s
+        A_uc = model.a_lat * model.b_lat  # Å² (orthorhombic unit cell)
+        prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6  # → μA·Å / V²
+        sigma *= prefactor
+
+        # --- Plotting ---
+        plt.plot(omegas, sigma, lw=2, label=fr'$\sigma^{{{a_dir}{b_dir}{c_dir}}}(\omega)$')
     plt.axhline(0, color='k', lw=0.5, ls='--')
     plt.xlabel('Photon Energy (eV)')
     plt.ylabel(r'Shift Conductivity ($\mu$A$\cdot$Å/V$^2$)')
@@ -969,11 +937,11 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
     plt.grid(True, alpha=0.3)
     plt.xlim(E_range)
     
-    suffix = f"_{a_dir}{b_dir}{c_dir}_E{E_field:.3f}{save_prefix}.png"
-    plt.savefig(f"kp{suffix}", dpi=300)
+    fname = f"kp_sc.png"
+    plt.savefig(fname, dpi=300)
     plt.close()
     
-    print(f"Saved Shift Current Figure: kp{suffix}")
+    print(f"Saved Shift Current Figure")
     return omegas, sigma
 
 if __name__ == "__main__":
@@ -984,24 +952,18 @@ if __name__ == "__main__":
 
     # Calculate Area
     area_uc = 2 * a_lat * b_lat # Approximate factor (depends on supercell definition)
-
     
-    # # single k point test
+    # single k point test
     # --------------------------------------------
     # model = TwistedBPModel(N_shell=1, E_field=0.0)
     # k_test = np.array([[0.0, 0.0]])
     # H_test = model.get_hamiltonians(k_test)
     # print(H_test[0])
     # print("Eigenvalues at Gamma:", np.linalg.eigvalsh(H_test[0]))
-    # plt.imshow(np.abs(H_test[0]), cmap='viridis')
-    # plt.colorbar()
-    # plt.title("Hamiltonian Magnitude at Gamma")
-    # plt.savefig("Hamiltonian_Magnitude_Gamma.png", dpi=200)
-    # plt.close()
-    
+
     # Standard 2D Band Structure
     # --------------------------------------------
-    cal_bands(N_shell=1, E_field=0.0, k_fine_steps=200, y_lim=(-0.4,1.0))
+    cal_bands(N_shell=1, E_field=0.0, k_fine_steps=200, y_lim=(-0.5,2))
     
     # 3D Band Structure
     # --------------------------------------------
@@ -1010,8 +972,8 @@ if __name__ == "__main__":
                   
     # Optical Conductivity
     # --------------------------------------------
-    calculate_optical_conductivity(N_shell=1, E_field=0.0, n_k=160, n_E=500,
-                                   eta=0.010, k_range=G_moire/2, E_range=(0.0, 1.0))
+    # calculate_optical_conductivity(N_shell=1, E_field=0.0, n_k=160, n_E=500,
+    #                                eta=0.010, k_range=G_moire/2, E_range=(0.0, 2.0))
                                    
     # # Matrix Element Map (VBM -> CBM)
     # --------------------------------------------
@@ -1021,19 +983,6 @@ if __name__ == "__main__":
     
     # # Shift Current Calculation
     # --------------------------------------------   
-    calculate_shift_current(N_shell=1, E_field=0.0, n_k=100, n_E=100, comp=('y', 'x', 'x'),
+    calculate_shift_current(N_shell=1, E_field=0.0, n_k=240, n_E=100,
                             # band_window=(8,9,10,10), 
-                            E_range=(0.0, 1.0),
-                            save_prefix="", k_range=G_moire/2,)
-    calculate_shift_current(N_shell=1, E_field=0.0, n_k=100, n_E=100, comp=('y', 'y', 'y'),
-                            # band_window=(8,9,10,10), 
-                            E_range=(0.0, 1.0),
-                            save_prefix="", k_range=G_moire/2,)
-    calculate_shift_current(N_shell=1, E_field=0.0, n_k=100, n_E=100, comp=('x', 'x', 'x'),
-                            # band_window=(8,9,10,10), 
-                            E_range=(0.0, 1.0),
-                            save_prefix="", k_range=G_moire/2,)
-    calculate_shift_current(N_shell=1, E_field=0.0, n_k=100, n_E=100, comp=('x', 'y', 'y'),
-                            # band_window=(8,9,10,10), 
-                            E_range=(0.0, 1.0),
-                            save_prefix="", k_range=G_moire/2,)
+                            E_range=(0.0, 2.4), k_range=G_moire/2,)
