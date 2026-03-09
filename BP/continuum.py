@@ -58,9 +58,7 @@ class TwistedBPModel:
         # print(self.G_vectors)
 
         self.dim_G = len(self.G_vectors)
-        self.dim_H_top = 2 * self.dim_G * self.N_top # dimension of top layer Hamiltonian
-        self.dim_H_bottom = 2 * self.dim_G * self.N_bottom # dimension of bottom layer Hamiltonian
-        self.dim_H = self.dim_H_top + self.dim_H_bottom # total Hamiltonian dimension
+        self.dim_H = 4 * self.dim_G # dimension of total Hamiltonian
         
         # Precompute k-independent part of Hamiltonian (Interlayer coupling)
         self.H_const = self._build_constant_hamiltonian()
@@ -71,13 +69,12 @@ class TwistedBPModel:
     def _build_constant_hamiltonian(self):
         """Pre-compute the part of Hamiltonian that doesn't depend on k (Hopping between layers)"""
         H = np.zeros((self.dim_H, self.dim_H), dtype=np.complex128)
-        dim_block = 2 * (self.dim_H_top + self.dim_H_bottom) # total dimension of the Hamiltonian for one G
         
         # --- Diagonal in G (Interlayer Conduction) ---
         # Tc(0) <-> Bc(2) with coupling gamma_C
-        idx = np.arange(self.dim_G) # num of blocks
-        H[idx * dim_block + 2 * (self.dim_H_top-1) + 0, idx * dim_block + 2 * (self.dim_H_top-1) + 2] = self.gamma_C
-        H[idx * dim_block + 2 * (self.dim_H_top-1) + 2, idx * dim_block + 2 * (self.dim_H_top-1) + 0] = self.gamma_C
+        idx = np.arange(self.dim_G) # num of 4x4 blocks
+        H[idx * 4 + 0, idx * 4 + 2] = self.gamma_C
+        H[idx * 4 + 2, idx * 4 + 0] = self.gamma_C
         
         # --- Off-diagonal in G (Interlayer Valence) ---
         # Tv(1) <-> Bv(3) with coupling gamma_V
@@ -94,8 +91,15 @@ class TwistedBPModel:
         
         rows, cols = np.where(mask)
 
-        H[rows * dim_block + 2 * (self.dim_H_top-1) + 1, cols * dim_block + 2 * (self.dim_H_top-1) + 3] = self.gamma_V
-        H[cols * dim_block + 2 * (self.dim_H_top-1) + 3, rows * dim_block + 2 * (self.dim_H_top-1) + 1] = self.gamma_V
+        delta_g = self.G_vectors[rows] - self.G_vectors[cols]
+        r0 = np.array([0.0, 0.0]) # reference point for phase, can be set to (0,0) for simplicity since only relative phases matter
+        phase = np.exp(1j * np.dot(delta_g, r0))
+        
+        H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V * phase
+        H[cols * 4 + 3, rows * 4 + 1] = self.gamma_V * np.conj(phase)
+
+        # H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V
+        # H[cols * 4 + 3, rows * 4 + 1] = self.gamma_V
         
         return H
     
@@ -130,24 +134,21 @@ class TwistedBPModel:
         p2_x = kx**2
         p2_y = ky**2
         
-        # Assign to diagonal blocks for all G at once
-        # Indices array (Ng,) to broadcast with (Nk, Ng)
-        r = np.arange(self.dim_G)
-
-        # --- Layer (Top) ---
-        for idx in range(self.N_top):
-            sf = np.cos(np.pi * idx / (self.N_top + 1)) # scaling factor
-            # Parameters
-            val_Tc = (self.u0 + sf * self.delta_ADp) + u_pot + self.etax * p2_x + self.etay * p2_y
-            val_Tv = self.u0 + u_pot + self.etax * p2_x + self.etay * p2_y
-            val_T_mix = self.delta + self.gamma_x * p2_x + self.gamma_y * p2_y + 1j * self.kai * ky
+        # --- Layer 1 (Top) ---
+        # Parameters
+        val_Tc = self.u0 + u_pot + self.etax * p2_x + self.etay * p2_y
+        val_Tv = self.u0 + u_pot + self.etax * p2_x + self.etay * p2_y
+        val_T_mix = self.delta + self.gamma_x * p2_x + self.gamma_y * p2_y + 1j * self.kai * ky
         
-        # --- Layer (Bottom) ---
+        # --- Layer 2 (Bottom) ---
         # Rotated 90 deg: p_x -> -p_y, p_y -> p_x
         val_Bc = self.u0 - u_pot + self.etax * p2_y + self.etay * p2_x
         val_Bv = self.u0 - u_pot + self.etax * p2_y + self.etay * p2_x
         val_B_mix = self.delta + self.gamma_x * p2_y + self.gamma_y * p2_x + 1j * self.kai * kx
         
+        # Assign to diagonal blocks for all G at once
+        # Indices array (Ng,) to broadcast with (Nk, Ng)
+        r = np.arange(self.dim_G)
         
         # Diagonals
         H_stack[:, r*4+0, r*4+0] += val_Tc
@@ -437,7 +438,7 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
     # plt.title(f"Folded Band Structure{suffix}")
     plt.grid(True, alpha=0.3)
     plt.legend()
-    plt.savefig(f"Folded_continuum_{suffix}.png", dpi=200)
+    plt.savefig(f"Folded_kp_{suffix}.png", dpi=200)
     plt.close()
     
     print(f"Figures saved with suffix {suffix}")
@@ -530,7 +531,7 @@ def plot_3d_bands(N_shell=1, E_field=0.0, k_range=0.2, n_grid=40,
 def calculate_optical_conductivity(N_shell=1, E_field=0.0, 
                                    E_range=(0.0, 1.0), n_E=500, eta=0.010,
                                    k_range=0.15, n_k=60, save_prefix=""):
-    """
+    r"""
     Calculate the interband optical response using velocity matrix elements,
     and construct an absorption-like spectrum.
 
@@ -699,7 +700,7 @@ def calculate_optical_conductivity(N_shell=1, E_field=0.0,
     
     plt.xlabel('Photon Energy (eV)')
     plt.ylabel('Optical Absorption (a.u.)')
-    plt.title(f'E={E_field} eV/A, $\eta$={eta*1000:.1f} meV')
+    plt.title(rf'E={E_field} eV/A, $\eta$={eta*1000:.1f} meV')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.xlim(E_range)
@@ -714,7 +715,7 @@ def calculate_optical_conductivity(N_shell=1, E_field=0.0,
 def plot_transition_matrix_elements(N_shell=1, E_field=0.0, 
                                     band_indices=None,
                                     k_range=0.15, n_k=60, save_prefix=""):
-    """
+    r"""
     Plot the magnitude squared of transition matrix elements |<j|v|i>|^2 
     in k-space as contour plots.
     
@@ -955,7 +956,8 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
         # with an extra 1/hbar absorbed into the Lorentzian (delta in 1/eV → 1/(eV·s^{-1}))
         e_charge = 1.602176634e-19   # C
         hbar = 1.054571817e-34       # J·s
-        A_uc = model.a_lat * model.b_lat  # Å² (orthorhombic unit cell)
+        # Calculate Area
+        A_uc = 1 / (np.abs(1/b_lat - 1/a_lat))**2 # Å² supercell area based on moiré periodicity
         prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6  # → μA·Å / V²
         sigma *= prefactor
         results[comp] = sigma
@@ -986,9 +988,6 @@ if __name__ == "__main__":
     a_lat=4.588
     b_lat=3.296
     G_moire = 2 * np.pi * np.abs(1/b_lat - 1/a_lat) # Moiré G vector magnitude for real lattice
-
-    # Calculate Area
-    area_uc = a_lat * b_lat # Approximate factor (depends on supercell definition)
     
     # single k point test
     # --------------------------------------------
@@ -1020,6 +1019,6 @@ if __name__ == "__main__":
     
     # # Shift Current Calculation
     # --------------------------------------------   
-    calculate_shift_current(N_shell=2, E_field=0.0, n_k=120, n_E=100,
+    calculate_shift_current(N_shell=1, E_field=0.0, n_k=240, n_E=100,
                             # band_window=(8,9,10,10), 
                             E_range=(0.0, 3.0), k_range=G_moire/2,)
