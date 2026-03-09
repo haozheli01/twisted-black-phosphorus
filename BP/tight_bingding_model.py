@@ -33,7 +33,7 @@ class TwistedBPModel:
         self.scale_factor = scale_factor
         # Stacking shift for interface coupling phase
         if stacking_shift is None:
-            self.stacking_shift = np.array([0.0, self.b_lat / 4.0])
+            self.stacking_shift = np.array([0.0, self.b_lat / 2.0])
         else:
             self.stacking_shift = np.asarray(stacking_shift, dtype=float)
 
@@ -917,14 +917,14 @@ if __name__ == "__main__":
 
     # Shift current
     calculate_shift_current(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                            scale_factor=0.05, n_k=60, n_E=400,
+                            scale_factor=0.05, n_k=100, n_E=400,
                             comp=('y', 'x', 'x'), E_range=(0.0, 2.0))
     calculate_shift_current(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                            scale_factor=0.05, n_k=60, n_E=400,
+                            scale_factor=0.05, n_k=100, n_E=400,
                             comp=('y', 'y', 'y'), E_range=(0.0, 2.0))
     calculate_shift_current(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                            scale_factor=0.05, n_k=60, n_E=400,
+                            scale_factor=0.05, n_k=100, n_E=400,
                             comp=('x', 'x', 'x'), E_range=(0.0, 2.0))
     calculate_shift_current(N_top=4, N_bottom=3, twist_angle=np.pi/2,
-                            scale_factor=0.05, n_k=60, n_E=400,
+                            scale_factor=0.05, n_k=100, n_E=400,
                             comp=('x', 'y', 'y'), E_range=(0.0, 2.0))
