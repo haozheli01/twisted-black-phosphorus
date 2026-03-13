@@ -102,7 +102,8 @@ class TwistedBPModel:
         # # This physically corresponds to a stacking shift r0.
         # # Without this, H is real => Berry Curvature is 0 => Shift Current is 0.
         delta_g = self.G_vectors[rows] - self.G_vectors[cols]
-        r0 = np.array([self.b_lat / 2, 0.0]) # Arbitrary shift approx 0.2 unit cells
+        # r0 = np.array([self.b_lat / 2, 0.0]) # Arbitrary shift approx 0.2 unit cells
+        r0 = np.array([0.0, 0.0]) # Arbitrary shift approx 0.2 unit cells
         phase = np.exp(1j * np.dot(delta_g, r0))
         
         H[rows * 4 + 1, cols * 4 + 3] = self.gamma_V * phase
@@ -802,7 +803,7 @@ def plot_transition_matrix_elements(N_shell=1, E_field=0.0,
 
 def calculate_shift_current(N_shell=1, E_field=0.0,
                             E_range=(0.0, 1.0), n_E=400, eta=0.010,
-                            k_range=0.15, n_k=60, comp=('x', 'y', 'y'),
+                            k_range=0.15, n_k=60,
                             band_window=None, save_prefix="", model=None):
     r"""
     Shift current sigma^{abc}(ω) via gauge-invariant Sum-Over-States method.
@@ -826,9 +827,8 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
         model : optional pre-built TwistedBPModel
     """
 
-    a_dir, b_dir, c_dir = comp
-    print(f"Calculating shift current sigma^{{{a_dir}{b_dir}{c_dir}}}(omega) "
-          f"(n_k={n_k}, η={eta*1000:.0f} meV)...")
+    comp_list=[('x', 'x', 'x'), ('x', 'y', 'y'), ('y', 'x', 'x'), ('y', 'y', 'y')]
+    plt.figure(figsize=(8, 6))
 
     if model is None:
         model = TwistedBPModel(N_shell=N_shell, E_field=E_field)
@@ -860,12 +860,6 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
     v_map = {'x': to_eig(vx_orb), 'y': to_eig(vy_orb)}
     w_map = {'xx': to_eig(w_xx), 'yy': to_eig(w_yy), 'xy': to_eig(w_xy), 'yx': to_eig(w_xy)}
 
-    v_a = v_map[a_dir]
-    v_b = v_map[b_dir]
-    v_c = v_map[c_dir]
-    w_ac_key = a_dir + c_dir
-    w_ac = w_map[w_ac_key]
-
     # Band selection
     mid = Nb // 2
     if band_window is None:
@@ -877,90 +871,108 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
 
     # Spectrum
     omegas = np.linspace(E_range[0], E_range[1], n_E)
-    sigma = np.zeros_like(omegas)
-    
-    print(f"  Transitions: {len(v_idx)} val x {len(c_idx)} cond, Nk={Nk}")
-    
-    eps_denom = 1e-5
 
-    for n in v_idx:
-        for m in c_idx:
-            w_mn = evals[:, m] - evals[:, n]  # (Nk,), > 0 for insulator
-            nonzero = w_mn > eps_denom
-            
-            f_n = 1.0 if n < mid else 0.0
-            f_m = 1.0 if m < mid else 0.0
-            f_nm = f_n - f_m
+    results = {}
 
-            if f_nm == 0.0:
-                continue
-            
-            # --- r^b_mn = v^b_{mn} / (i ω_mn) ---
-            r_b_mn = np.zeros(Nk, dtype=np.complex128)
-            r_b_mn[nonzero] = v_b[nonzero, m, n] / (1j * w_mn[nonzero])
-            
-            # --- Term A: intraband velocity differences ---
-            termA = np.zeros(Nk, dtype=np.complex128)
-            delta_a = v_a[nonzero, n, n] - v_a[nonzero, m, m]
-            delta_c = v_c[nonzero, n, n] - v_c[nonzero, m, m]
-            termA[nonzero] = (
-                v_c[nonzero, n, m] * delta_a
-                + v_a[nonzero, n, m] * delta_c
-            )
-            termA[nonzero] /= (-w_mn[nonzero])
-            
-            # --- Term B: sum over intermediate states (vectorized over p) ---
-            w_np = evals[:, n, None] - evals            # (Nk, Nb)
-            w_pm = evals - evals[:, m, None]            # (Nk, Nb)
+    for comp in comp_list:
+        a_dir, b_dir, c_dir = comp
+        print(f"Calculating shift current sigma^{{{a_dir}{b_dir}{c_dir}}}(omega) "
+            f"(n_k={n_k}, η={eta*1000:.0f} meV)...")
+        v_a = v_map[a_dir]
+        v_b = v_map[b_dir]
+        v_c = v_map[c_dir]
+        w_ac_key = a_dir + c_dir
+        w_ac = w_map[w_ac_key]
 
-            valid_p = (np.abs(w_np) > eps_denom) & (np.abs(w_pm) > eps_denom)
-            valid_p[:, n] = False
-            valid_p[:, m] = False
-            valid_p &= nonzero[:, None]
+        sigma = np.zeros_like(omegas)
+        
+        print(f"  Transitions: {len(v_idx)} val x {len(c_idx)} cond, Nk={Nk}")
+        
+        eps_denom = 1e-5
 
-            num1 = v_c[:, n, :] * v_a[:, :, m]
-            num2 = v_a[:, n, :] * v_c[:, :, m]
+        for n in v_idx:
+            for m in c_idx:
+                w_mn = evals[:, m] - evals[:, n]  # (Nk,), > 0 for insulator
+                nonzero = w_mn > eps_denom
+                
+                f_n = 1.0 if n < mid else 0.0
+                f_m = 1.0 if m < mid else 0.0
+                f_nm = f_n - f_m
 
-            termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
-            termB_contrib[valid_p] = (
-                num1[valid_p] / w_pm[valid_p]
-                - num2[valid_p] / w_np[valid_p]
-            )
-            termB = np.sum(termB_contrib, axis=1)
+                if f_nm == 0.0:
+                    continue
+                
+                # --- r^b_mn = v^b_{mn} / (i ω_mn) ---
+                r_b_mn = np.zeros(Nk, dtype=np.complex128)
+                r_b_mn[nonzero] = v_b[nonzero, m, n] / (1j * w_mn[nonzero])
+                
+                # --- Term A: intraband velocity differences ---
+                termA = np.zeros(Nk, dtype=np.complex128)
+                delta_a = v_a[nonzero, n, n] - v_a[nonzero, m, m]
+                delta_c = v_c[nonzero, n, n] - v_c[nonzero, m, m]
+                termA[nonzero] = (
+                    v_c[nonzero, n, m] * delta_a
+                    + v_a[nonzero, n, m] * delta_c
+                )
+                termA[nonzero] /= (-w_mn[nonzero])
+                
+                # --- Term B: sum over intermediate states (vectorized over p) ---
+                w_np = evals[:, n, None] - evals            # (Nk, Nb)
+                w_pm = evals - evals[:, m, None]            # (Nk, Nb)
 
-            # --- Term C: generalized derivative correction ---
-            termC = -w_ac[:, n, m]
+                valid_p = (np.abs(w_np) > eps_denom) & (np.abs(w_pm) > eps_denom)
+                valid_p[:, n] = False
+                valid_p[:, m] = False
+                valid_p &= nonzero[:, None]
 
-            # --- Generalized derivative ---
-            K_nm = termA + termB + termC # important!
-            r_deriv = np.zeros(Nk, dtype=np.complex128)
-            r_deriv[nonzero] = K_nm[nonzero] / (-1j * (-w_mn[nonzero]))
-            
-            # --- Shift current weight ---
-            weight = f_nm * np.imag(r_b_mn * r_deriv)
-            
-            # --- Lorentzian broadening ---
-            diff = omegas[:, None] - w_mn[None, :]       # (n_E, Nk)
-            lorentz = (1.0/np.pi) * eta / (diff**2 + eta**2)
-            
-            # Accumulate
-            sigma += np.sum(lorentz * weight[None, :], axis=1)
+                num1 = v_c[:, n, :] * v_a[:, :, m]
+                num2 = v_a[:, n, :] * v_c[:, :, m]
 
-    # Normalize by k-point count
-    sigma /= Nk
+                termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
+                termB_contrib[valid_p] = (
+                    num1[valid_p] / w_pm[valid_p]
+                    - num2[valid_p] / w_np[valid_p]
+                )
+                termB = np.sum(termB_contrib, axis=1)
 
-    # Physical prefactor: sigma has units of Å² so far (from velocity = dH/dk in eV·Å).
-    # Full formula: sigma^{abc} = (2*pi*e^2) / (hbar * A_uc) * I(omega)
-    # with an extra 1/hbar absorbed into the Lorentzian (delta in 1/eV → 1/(eV·s^{-1}))
-    e_charge = 1.602176634e-19   # C
-    hbar = 1.054571817e-34       # J·s
-    A_uc = model.a_lat * model.b_lat  # Å² (orthorhombic unit cell)
-    prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6  # → μA·Å / V²
-    sigma *= prefactor
+                # --- Term C: generalized derivative correction ---
+                termC = -w_ac[:, n, m]
+
+                # --- Generalized derivative ---
+                K_nm = termA + termB + termC # important!
+                r_deriv = np.zeros(Nk, dtype=np.complex128)
+                r_deriv[nonzero] = K_nm[nonzero] / (-1j * (-w_mn[nonzero]))
+                
+                # --- Shift current weight ---
+                weight = f_nm * np.imag(r_b_mn * r_deriv)
+                
+                # --- Lorentzian broadening ---
+                diff = omegas[:, None] - w_mn[None, :]       # (n_E, Nk)
+                lorentz = (1.0/np.pi) * eta / (diff**2 + eta**2)
+                
+                # Accumulate
+                sigma += np.sum(lorentz * weight[None, :], axis=1)
+
+        # Normalize by k-point count
+        sigma /= Nk
+
+        # Physical prefactor: sigma has units of Å² so far (from velocity = dH/dk in eV·Å).
+        # Full formula: sigma^{abc} = (2*pi*e^2) / (hbar * A_uc) * I(omega)
+        # with an extra 1/hbar absorbed into the Lorentzian (delta in 1/eV → 1/(eV·s^{-1}))
+        e_charge = 1.602176634e-19   # C
+        hbar = 1.054571817e-34       # J·s
+        # Calculate Area
+        A_uc = 1 / (np.abs(1/b_lat - 1/a_lat))**2 # Å² supercell area based on moiré periodicity
+        prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6  # → μA·Å / V²
+        sigma *= prefactor
+        results[comp] = sigma
 
     # --- Plotting ---
-    plt.figure(figsize=(8, 6))
-    plt.plot(omegas, sigma, 'r-', lw=2, label=fr'$\sigma^{{{a_dir}{b_dir}{c_dir}}}(\omega)$')
+    plt.plot(omegas, results[('x', 'x', 'x')], 'r-', lw=2, label=fr'$\sigma^{{xxx}}(\omega)$')
+    plt.plot(omegas, results[('y', 'y', 'y')], 'b--', lw=2, label=fr'$\sigma^{{yyy}}(\omega)$')
+    plt.plot(omegas, results[('y', 'x', 'x')], 'g-', lw=2, label=fr'$\sigma^{{yxx}}(\omega)$')
+    plt.plot(omegas, results[('x', 'y', 'y')], 'm--', lw=2, label=fr'$\sigma^{{xyy}}(\omega)$')
+
     plt.axhline(0, color='k', lw=0.5, ls='--')
     plt.xlabel('Photon Energy (eV)')
     plt.ylabel(r'Shift Conductivity ($\mu$A$\cdot$Å/V$^2$)')
@@ -969,12 +981,182 @@ def calculate_shift_current(N_shell=1, E_field=0.0,
     plt.grid(True, alpha=0.3)
     plt.xlim(E_range)
     
-    suffix = f"_{a_dir}{b_dir}{c_dir}_E{E_field:.3f}{save_prefix}.png"
-    plt.savefig(f"kp{suffix}", dpi=300)
+    fname = f"kp_sc.png"
+    plt.savefig(fname, dpi=300)
     plt.close()
     
-    print(f"Saved Shift Current Figure: kp{suffix}")
-    return omegas, sigma
+    print(f"Saved Shift Current Figure")
+    return omegas, results
+
+def calculate_z_shift_current(N_shell=1, E_field=0.0,
+                               E_range=(0.0, 1.0), n_E=400, eta=0.010,
+                               k_range=0.15, n_k=60, d_interlayer=5.3,
+                               band_window=None):
+    r"""
+    Calculate out-of-plane (z-direction) shift current: sigma^{z;xx}(omega) and sigma^{z;yy}(omega).
+
+    The z-shift current is:
+
+    \\sigma^{zbb}(\omega) = C * \\sum_{nm}[ f_{nm} \\Im[r^b_{mn} (r^b_{nm})_{;z}] * \\delta(\omega - \omega_{mn})]
+                          = C * \\sum_{nm}[ f_{nm} \\(R_{nm}^{b})_{;z}(k) * |r^b_{nm}(k)|^2 * \\delta(\omega - \omega_{mn})]
+
+    For a 2D system where z is NOT periodic, the z-shift vector is simply the
+    interlayer charge transfer upon optical excitation:
+
+        (R_{nm}^{b})_{;z}(k) = - <u_n|z|u_n> + <u_m|z|u_m>
+
+    where r^b_{nm} = v^b_{nm} / (i * omega_{nm}) is the interband position matrix element.
+
+    Unlike the in-plane shift current, no covariant derivative (Terms A, B, C) is needed,
+    because z is not a crystal momentum direction.
+
+    Parameters
+    ----------
+    d_interlayer : float
+        Physical interlayer distance in Angstrom (default 5.3 A for BP bilayer).
+        Top layer orbitals are at z = +d/2, bottom at z = -d/2.
+    """
+    comp_list = [('z', 'x', 'x'), ('z', 'y', 'y')]
+
+    print(f"Calculating z-shift current (d_interlayer={d_interlayer} A)...")
+    model = TwistedBPModel(N_shell=N_shell, E_field=E_field)
+
+    # 1. K-grid
+    kx = np.linspace(-k_range, k_range, n_k)
+    ky = np.linspace(-k_range, k_range, n_k)
+    KX, KY = np.meshgrid(kx, ky)
+    k_points = np.column_stack([KX.flatten(), KY.flatten()])
+    Nk = len(k_points)
+
+    # 2. Diagonalize
+    print(f"  Diagonalizing H for {Nk} k-points...")
+    H_stack = model.get_hamiltonians(k_points)
+    evals, evecs = np.linalg.eigh(H_stack)
+    Nb = evals.shape[1]
+
+    # 3. Velocity matrices in eigenbasis
+    print(f"  Calculating velocity matrices...")
+    vx_orb, vy_orb = model.get_velocity_matrices(k_points)
+    U = evecs
+    U_dag = np.conj(np.transpose(U, (0, 2, 1)))
+
+    vx_eig = U_dag @ vx_orb @ U  # (Nk, Nb, Nb)
+    vy_eig = U_dag @ vy_orb @ U
+
+    # 4. Build z-position operator and transform to eigenbasis
+    #    Top layer (Tc=0, Tv=1): z = +d/2
+    #    Bottom layer (Bc=2, Bv=3): z = -d/2
+    dim_G = model.dim_G
+    dim_H = model.dim_H
+    z_op = np.zeros((dim_H, dim_H), dtype=np.float64)
+    r = np.arange(dim_G)
+    z_op[r*4+0, r*4+0] = +d_interlayer / 2.0
+    z_op[r*4+1, r*4+1] = +d_interlayer / 2.0
+    z_op[r*4+2, r*4+2] = -d_interlayer / 2.0
+    z_op[r*4+3, r*4+3] = -d_interlayer / 2.0
+
+    # Transform: z_eig = U^dag @ z_op @ U  (Nk, Nb, Nb)
+    z_eig = U_dag @ z_op @ U
+    # Diagonal: <n|z|n> for each band
+    z_diag = np.real(np.diagonal(z_eig, axis1=1, axis2=2))  # (Nk, Nb)
+
+    # 5. Band selection
+    mid = Nb // 2
+    if band_window is None:
+        v_idx = np.arange(0, mid)
+        c_idx = np.arange(mid, Nb)
+    else:
+        v_idx = np.arange(band_window[0], band_window[1]+1)
+        c_idx = np.arange(band_window[2], band_window[3]+1)
+
+    # 6. Compute z-shift current spectrum
+    omegas = np.linspace(E_range[0], E_range[1], n_E)
+    eps_denom = 1e-5
+    results = {}
+
+    # v_eig[:, n, m] for n in c_idx, m in v_idx
+    v_map = {'x': vx_eig, 'y': vy_eig}
+
+    # Energy differences: omega_{nm} = E_n - E_m for n in c_idx, m in v_idx
+    # Shape: (Nk, Nv, Nc)
+    E_v = evals[:, v_idx]  # (Nk, Nv)
+    E_c = evals[:, c_idx]  # (Nk, Nc)
+    delta_E = E_c[:, None, :] - E_v[:, :, None]  # (Nk, Nv, Nc)
+
+    # (R_{nm}^{b})_{;z}(k) = - <u_n|z|u_n> + <u_m|z|u_m> for n in c_idx, m in v_idx
+    z_v = z_diag[:, v_idx]  # (Nk, Nv)
+    z_c = z_diag[:, c_idx]  # (Nk, Nc)
+    delta_z = z_v[:, :, None] - z_c[:, None, :]  # (Nk, Nv, Nc)
+
+    print(f"  Transitions: {len(v_idx)} val x {len(c_idx)} cond, Nk={Nk}")
+
+    for comp in comp_list:
+        a_dir, b_dir, c_dir = comp
+        assert b_dir == c_dir, "z-shift current only for linearly polarized light (b==c)"
+        print(f"  Computing sigma^{{{a_dir}{b_dir}{c_dir}}}...")
+
+        v_b = v_map[b_dir]
+        # |v^b_{nm}|^2 for n in c_idx, m in v_idx: v_b[:, c, v]
+        # v_b[:, n, m] where n in c_idx, m in v_idx
+        vb_vc = v_b[:, v_idx, :][:, :, c_idx]  # (Nk, Nv, Nc)
+        Mb2 = np.abs(vb_vc)**2  # (Nk, Nv, Nc)
+
+        # |r^b_{nm}|^2 = |v^b_{nm}|^2 / omega_{nm}^2
+        # Mask out near-zero energy differences
+        valid = delta_E > eps_denom
+        r_b_sq = np.zeros_like(Mb2)
+        r_b_sq[valid] = Mb2[valid] / delta_E[valid]**2
+
+        # Integrand: f_{nm} * delta_z * |r^b|^2  (f_nm = -1 for c->v)
+        integrand = (-1) * delta_z * r_b_sq  # (Nk, Nv, Nc)
+
+        # Flatten pair dimension
+        N_pairs = len(v_idx) * len(c_idx)
+        integrand_flat = integrand.reshape(Nk, N_pairs)
+        dE_flat = delta_E.reshape(Nk, N_pairs)
+
+        # Accumulate spectrum with Lorentzian broadening
+        sigma = np.zeros_like(omegas)
+        batch_size = max(1, min(N_pairs, max(1, 200_000_000 // (n_E * Nk))))
+        for b_start in range(0, N_pairs, batch_size):
+            b_end = min(b_start + batch_size, N_pairs)
+            dE_batch = dE_flat[:, b_start:b_end]
+            int_batch = integrand_flat[:, b_start:b_end]
+
+            diff = omegas[:, None, None] - dE_batch[None, :, :]
+            lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+            sigma += np.sum(lorentz * int_batch[None, :, :], axis=(1, 2))
+
+        sigma /= Nk
+
+        # Physical prefactor (same as in-plane shift current)
+        e_charge = 1.602176634e-19
+        hbar = 1.054571817e-34
+        a_lat = model.a_lat
+        b_lat = model.b_lat
+        A_uc = 1 / (np.abs(1/b_lat - 1/a_lat))**2
+        prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6  # -> muA*A/V^2
+        sigma *= prefactor
+        results[comp] = sigma
+
+    # 7. Plotting
+    plt.figure(figsize=(8, 6))
+    plt.plot(omegas, results[('z', 'x', 'x')], 'r-', lw=2, label=r'$\sigma^{zxx}(\omega)$')
+    plt.plot(omegas, results[('z', 'y', 'y')], 'b--', lw=2, label=r'$\sigma^{zyy}(\omega)$')
+    plt.axhline(0, color='k', lw=0.5, ls='--')
+    plt.xlabel('Photon Energy (eV)')
+    plt.ylabel(r'Shift Conductivity ($\mu$A$\cdot$Å/V$^2$)')
+    plt.title(f'Out-of-plane Shift Current\nE={E_field} eV/A, d={d_interlayer} A')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.xlim(E_range)
+
+    fname = f"kp_z_sc.png"
+    plt.savefig(fname, dpi=300)
+    plt.close()
+
+    print(f"Saved Z-Shift Current Figure: {fname}")
+    return omegas, results
 
 if __name__ == "__main__":
     # BP parameters
@@ -982,10 +1164,6 @@ if __name__ == "__main__":
     b_lat=3.296
     G_moire = 2 * np.pi * np.abs(1/b_lat - 1/a_lat) # Moiré G vector magnitude for real lattice
 
-    # Calculate Area
-    area_uc = 2 * a_lat * b_lat # Approximate factor (depends on supercell definition)
-
-    
     # # single k point test
     # --------------------------------------------
     # model = TwistedBPModel(N_shell=1, E_field=0.0)
@@ -1001,39 +1179,33 @@ if __name__ == "__main__":
     
     # Standard 2D Band Structure
     # --------------------------------------------
-    cal_bands(N_shell=1, E_field=0.0, k_fine_steps=200, y_lim=(-0.4,1.0))
+    # cal_bands(N_shell=1, E_field=0.0, k_fine_steps=200, y_lim=(-0.6,1.4))
     
-    # 3D Band Structure
-    # --------------------------------------------
+    # # 3D Band Structure
+    # # --------------------------------------------
     # plot_3d_bands(N_shell=1, E_field=0.0, k_range=G_moire/2, n_grid=60, bands_to_plot=4,
     #               view_elev=15, view_azim=45)
                   
-    # Optical Conductivity
-    # --------------------------------------------
-    calculate_optical_conductivity(N_shell=1, E_field=0.0, n_k=160, n_E=500,
-                                   eta=0.010, k_range=G_moire/2, E_range=(0.0, 1.0))
+    # # Optical Conductivity
+    # # --------------------------------------------
+    # calculate_optical_conductivity(N_shell=1, E_field=0.0, n_k=160, n_E=500,
+    #                                eta=0.010, k_range=G_moire/2, E_range=(0.0, 1.0))
                                    
-    # # Matrix Element Map (VBM -> CBM)
-    # --------------------------------------------
+    # # # Matrix Element Map (VBM -> CBM)
+    # # --------------------------------------------
     # plot_transition_matrix_elements(N_shell=1, E_field=0.0, 
-    #                                 # band_indices=(1, 2),
+    #                                 band_indices=(8, 10),
     #                                 k_range=G_moire/2, n_k=160)
     
-    # # Shift Current Calculation
-    # --------------------------------------------   
-    calculate_shift_current(N_shell=1, E_field=0.0, n_k=100, n_E=100, comp=('y', 'x', 'x'),
+    # # # Shift Current Calculation
+    # # --------------------------------------------   
+    calculate_shift_current(N_shell=1, E_field=0.0, n_k=100, n_E=100,
                             # band_window=(8,9,10,10), 
                             E_range=(0.0, 1.0),
                             save_prefix="", k_range=G_moire/2,)
-    calculate_shift_current(N_shell=1, E_field=0.0, n_k=100, n_E=100, comp=('y', 'y', 'y'),
-                            # band_window=(8,9,10,10), 
-                            E_range=(0.0, 1.0),
-                            save_prefix="", k_range=G_moire/2,)
-    calculate_shift_current(N_shell=1, E_field=0.0, n_k=100, n_E=100, comp=('x', 'x', 'x'),
-                            # band_window=(8,9,10,10), 
-                            E_range=(0.0, 1.0),
-                            save_prefix="", k_range=G_moire/2,)
-    calculate_shift_current(N_shell=1, E_field=0.0, n_k=100, n_E=100, comp=('x', 'y', 'y'),
-                            # band_window=(8,9,10,10), 
-                            E_range=(0.0, 1.0),
-                            save_prefix="", k_range=G_moire/2,)
+    
+    # Z-direction (out-of-plane) Shift Current
+    # --------------------------------------------
+    calculate_z_shift_current(N_shell=0, E_field=0.0, n_k=240, n_E=100,
+                              E_range=(0.0, 1.0), k_range=G_moire/2,
+                              d_interlayer=5.3)
