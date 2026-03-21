@@ -2027,8 +2027,8 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
       2. Real-space envelope: |Φ_S(r)|² = Σ_{vc} |FFT[A^S_{vc}(k)]|²
          (probability distribution of electron-hole relative coordinate)
       3. Layer-resolved electron and hole densities:
-         ρ_e(layer) = Σ_{ck} |u_c^layer(k)|² Σ_v |A^S_{vck}|²
-         ρ_h(layer) = Σ_{vk} |u_v^layer(k)|² Σ_c |A^S_{vck}|²
+         rho_e(layer) = Σ_{ck} |u_c^layer(k)|² Σ_v |A^S_{vck}|²
+         rho_h(layer) = Σ_{vk} |u_v^layer(k)|² Σ_c |A^S_{vck}|²
 
     Parameters
     ----------
