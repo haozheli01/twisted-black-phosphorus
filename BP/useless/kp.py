@@ -997,8 +997,8 @@ def calculate_z_shift_current(N_shell=1, E_field=0.0,
 
     The z-shift current is:
 
-    \\sigma^{zbb}(\omega) = C * \\sum_{nm}[ f_{nm} \\Im[r^b_{mn} (r^b_{nm})_{;z}] * \\delta(\omega - \omega_{mn})]
-                          = C * \\sum_{nm}[ f_{nm} \\(R_{nm}^{b})_{;z}(k) * |r^b_{nm}(k)|^2 * \\delta(\omega - \omega_{mn})]
+    \\sigma^{zbb}(\omega) = C * \\sum_{nm}[ f_{nm} \\Im[r^b_{mn} (r^b_{nm})_{;z}] * \\delta(\omega - \omega_{nm})]
+                          = C * \\sum_{nm}[ f_{nm} \\(R_{nm}^{b})_{;z}(k) * |r^b_{nm}(k)|^2 * \\delta(\omega - \omega_{nm})]
 
     For a 2D system where z is NOT periodic, the z-shift vector is simply the
     interlayer charge transfer upon optical excitation:
