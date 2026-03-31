@@ -23,16 +23,10 @@ class TwistedBPModel:
         And the bottom layer can be twisted by an angle, which modifies the intralayer terms H0, H2 and interlayer coupling H3 accordingly.
 
         For the coupling between the top and bottom layers, we use an effective coupling strength to capture the main physics of the interface,
-        following C Sevik et al. 2D Mater. 4 (2017) 035025, which using constant coupling strength between the conduction bands and valence bands
-        of the two layers, respectively.
+        following C Sevik et al. 2D Mater. 4 (2017) 035025.
 
         The total hamiltonian is:
         H = [[H_top, V_sub], [V_sub^dagger, H_bot]]
-          = [[E_cond(top), 0, gamma_cond, 0],
-             [0, E_val(top), 0, gamma_val],
-             [gamma_cond, 0, E_cond(bot), 0],
-             [0, gamma_val, 0, E_val(bot)]].
-        We then transform this Hamiltonian back to the sublattice basis for the velocity and curvature calculations.
         """
         # monolayer BP parameters
         self.b_lat=4.588 # armchair direction
@@ -42,8 +36,7 @@ class TwistedBPModel:
         self.twist_angle = twist_angle
 
         # effective interface coupling strength (in eV)
-        self.cond = 0.185
-        self.val  = 0.000
+        self.coupling = 0.100
 
         # tight-binding parameters
         self.a1 = 2.22
@@ -107,7 +100,7 @@ class TwistedBPModel:
         """
         Compute the Hamiltonian in sublattice basis.
         Each layer block is H = [[a, z], [z*, a]]
-        Interlayer coupling V_sub is calculated at each k-point.
+        Interlayer coupling V_sub is a constant matrix.
         """
         k_points = np.atleast_2d(k_points)
         num_k = len(k_points)
@@ -123,8 +116,6 @@ class TwistedBPModel:
         ham_top[:, 0, 1] = z_t
         ham_top[:, 1, 0] = np.conj(z_t)
 
-        phase_top = z_t / np.abs(z_t)
-
         if self.N_bottom == 0:
             return ham_top
 
@@ -139,18 +130,16 @@ class TwistedBPModel:
         ham_bot[:, 0, 1] = z_b
         ham_bot[:, 1, 0] = np.conj(z_b)
 
-        phase_bot = z_b / np.abs(z_b)
-
         ham = np.zeros((num_k, 4, 4), dtype=np.complex128)
         ham[:, :2, :2] = ham_top
         ham[:, 2:4, 2:4] = ham_bot
 
         # interlayer coupling
         ham_inter = np.zeros((num_k, 2, 2), dtype=np.complex128)
-        ham_inter[:, 0, 0] = (self.cond + self.val) / 2 * phase_top * phase_bot.conj()
-        ham_inter[:, 0, 1] = (self.cond - self.val) / 2 * phase_top
-        ham_inter[:, 1, 0] = (self.cond - self.val) / 2 * phase_bot.conj()
-        ham_inter[:, 1, 1] = (self.cond + self.val) / 2
+        ham_inter[:, 0, 0] = self.coupling
+        ham_inter[:, 0, 1] = self.coupling
+        ham_inter[:, 1, 0] = self.coupling
+        ham_inter[:, 1, 1] = self.coupling
 
         ham[:, :2, 2:4] = ham_inter
         ham[:, 2:4, :2] = ham_inter.conj().transpose((0, 2, 1))
@@ -394,19 +383,14 @@ class TwistedBPModel:
         pf_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
         vx_b, vy_b = self._layer_velocity(k_points, self.twist_angle, pf_b)
 
-        # Interlayer coupling derivatives
-        dV_x, dV_y = self._coupling_velocity(k_points)
+        # Interlayer coupling derivatives are all zeros since we assume a constant coupling strength
 
         vx = np.zeros((num_k, 4, 4), dtype=np.complex128)
         vy = np.zeros((num_k, 4, 4), dtype=np.complex128)
         vx[:, :2, :2] = vx_t
         vx[:, 2:4, 2:4] = vx_b
-        vx[:, :2, 2:4] = dV_x
-        vx[:, 2:4, :2] = dV_x.conj().transpose((0, 2, 1))
         vy[:, :2, :2] = vy_t
         vy[:, 2:4, 2:4] = vy_b
-        vy[:, :2, 2:4] = dV_y
-        vy[:, 2:4, :2] = dV_y.conj().transpose((0, 2, 1))
 
         return vx, vy
 
@@ -449,162 +433,6 @@ class TwistedBPModel:
 
         return results[0], results[1], results[2]
 
-    def _compute_phase_derivatives(self, k_points, twist_angle, prefactor):
-        """
-        Compute phase angle θ = arg(z) and its first/second derivatives for one layer.
-
-        z = tAB + tAC + prefactor * tACp  (off-diagonal element of the 2x2 block)
-        phase = z / |z| = e^{iθ}
-
-        Returns
-        -------
-        phase : (Nk,) complex — z / |z|
-        dtheta_x, dtheta_y : (Nk,) real — dθ/dk_x, dθ/dk_y
-        d2theta_xx, d2theta_yy, d2theta_xy : (Nk,) real — d²θ/dk_μ dk_ν
-        """
-        k_points = np.atleast_2d(k_points)
-
-        # --- z from basic_block ---
-        tAA, tAB, tAC, tAD, tADp, tACp = self.basic_block(k_points, twist_angle)
-        z = tAB + tAC + prefactor * tACp
-        z_abs2 = np.abs(z)**2   # |z|²
-        phase = z / np.abs(z)
-
-        # --- dz/dk from basic_block_velocity ---
-        (dAA_x, dAA_y, dAB_x, dAB_y, dAC_x, dAC_y,
-         dAD_x, dAD_y, dADp_x, dADp_y, dACp_x, dACp_y) = \
-            self.basic_block_velocity(k_points, twist_angle)
-        dz_x = dAB_x + dAC_x + prefactor * dACp_x
-        dz_y = dAB_y + dAC_y + prefactor * dACp_y
-
-        # --- d²z/dk from basic_block_curvature ---
-        (d2AA_xx, d2AA_yy, d2AA_xy,
-         d2AB_xx, d2AB_yy, d2AB_xy,
-         d2AC_xx, d2AC_yy, d2AC_xy,
-         d2AD_xx, d2AD_yy, d2AD_xy,
-         d2ADp_xx, d2ADp_yy, d2ADp_xy,
-         d2ACp_xx, d2ACp_yy, d2ACp_xy) = \
-            self.basic_block_curvature(k_points, twist_angle)
-        d2z_xx = d2AB_xx + d2AC_xx + prefactor * d2ACp_xx
-        d2z_yy = d2AB_yy + d2AC_yy + prefactor * d2ACp_yy
-        d2z_xy = d2AB_xy + d2AC_xy + prefactor * d2ACp_xy
-
-        # --- First derivative of θ ---
-        # dθ/dk_μ = Im(z* · dz/dk_μ) / |z|²
-        zc = np.conj(z)
-        zc_dz_x = zc * dz_x
-        zc_dz_y = zc * dz_y
-        dtheta_x = np.imag(zc_dz_x) / z_abs2
-        dtheta_y = np.imag(zc_dz_y) / z_abs2
-
-        # --- Second derivative of θ ---
-        # d²θ/dk_μ dk_ν = [Im(dz*/dk_ν · dz/dk_μ + z* · d²z/dk_μdk_ν) · |z|²
-        #                  − Im(z* · dz/dk_μ) · 2·Re(z* · dz/dk_ν)] / |z|⁴
-        z_abs4 = z_abs2**2
-        dzc_x = np.conj(dz_x)
-        dzc_y = np.conj(dz_y)
-
-        def _d2theta(dz_mu, dz_nu, dzc_nu, d2z_munu, zc_dz_mu, zc_dz_nu):
-            numerator = (np.imag(dzc_nu * dz_mu + zc * d2z_munu) * z_abs2
-                         - np.imag(zc_dz_mu) * 2 * np.real(zc_dz_nu))
-            return numerator / z_abs4
-
-        d2theta_xx = _d2theta(dz_x, dz_x, dzc_x, d2z_xx, zc_dz_x, zc_dz_x)
-        d2theta_yy = _d2theta(dz_y, dz_y, dzc_y, d2z_yy, zc_dz_y, zc_dz_y)
-        d2theta_xy = _d2theta(dz_x, dz_y, dzc_y, d2z_xy, zc_dz_x, zc_dz_y)
-
-        return phase, dtheta_x, dtheta_y, d2theta_xx, d2theta_yy, d2theta_xy
-
-    def _coupling_velocity(self, k_points):
-        """
-        Compute dV/dk_x and dV/dk_y for the interlayer coupling block.
-
-        V = [[gamma+ · φ_t · φ_b*,  gamma- · φ_t  ],
-             [gamma- · φ_b*,         gamma+         ]]
-
-        dV[0,0]/dk_μ = i · gamma+ · (dθ_t_μ - dθ_b_μ) · φ_t · φ_b*
-        dV[0,1]/dk_μ = i · gamma- · dθ_t_μ · φ_t
-        dV[1,0]/dk_μ = -i · gamma- · dθ_b_μ · φ_b*
-        dV[1,1]/dk_μ = 0
-
-        Here gamma+ = (cond + val)/2, gamma- = (cond - val)/2, and φ_t, φ_b are the phase factors for top and bottom layers.
-        Returns dV_x, dV_y each (Nk, 2, 2) complex.
-        """
-        k_points = np.atleast_2d(k_points)
-        num_k = len(k_points)
-        gp = (self.cond + self.val) / 2   # γ+
-        gm = (self.cond - self.val) / 2   # γ-
-
-        pf_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
-        pf_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
-
-        phase_t, dt_x, dt_y, _, _, _ = \
-            self._compute_phase_derivatives(k_points, 0.0, pf_t)
-        phase_b, db_x, db_y, _, _, _ = \
-            self._compute_phase_derivatives(k_points, self.twist_angle, pf_b)
-
-        phase_b_conj = np.conj(phase_b)
-        P = phase_t * phase_b_conj  # φ_t · φ_b*
-
-        dV_x = np.zeros((num_k, 2, 2), dtype=np.complex128)
-        dV_y = np.zeros((num_k, 2, 2), dtype=np.complex128)
-
-        # dV/dk_x
-        dV_x[:, 0, 0] = 1j * gp * (dt_x - db_x) * P
-        dV_x[:, 0, 1] = 1j * gm * dt_x * phase_t
-        dV_x[:, 1, 0] = -1j * gm * db_x * phase_b_conj
-
-        # dV/dk_y
-        dV_y[:, 0, 0] = 1j * gp * (dt_y - db_y) * P
-        dV_y[:, 0, 1] = 1j * gm * dt_y * phase_t
-        dV_y[:, 1, 0] = -1j * gm * db_y * phase_b_conj
-
-        return dV_x, dV_y
-
-    def _coupling_curvature(self, k_points):
-        """
-        Compute d²V/dk_μ dk_ν for the interlayer coupling block.
-
-        d²V[0,0]/dk_μν = γ+ · [i·(d²θ_t_μν − d²θ_b_μν) − (dθ_t_μ−dθ_b_μ)(dθ_t_ν−dθ_b_ν)] · P
-        d²V[0,1]/dk_μν = γ- · [i·d²θ_t_μν − dθ_t_μ·dθ_t_ν] · φ_t
-        d²V[1,0]/dk_μν = γ- · [−i·d²θ_b_μν − dθ_b_μ·dθ_b_ν] · φ_b*
-        d²V[1,1]/dk_μν = 0
-
-        Returns d2V_xx, d2V_yy, d2V_xy each (Nk, 2, 2) complex.
-        """
-        k_points = np.atleast_2d(k_points)
-        num_k = len(k_points)
-        gp = (self.cond + self.val) / 2
-        gm = (self.cond - self.val) / 2
-
-        pf_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
-        pf_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
-
-        phase_t, dt_x, dt_y, d2t_xx, d2t_yy, d2t_xy = \
-            self._compute_phase_derivatives(k_points, 0.0, pf_t)
-        phase_b, db_x, db_y, d2b_xx, d2b_yy, d2b_xy = \
-            self._compute_phase_derivatives(k_points, self.twist_angle, pf_b)
-
-        phase_b_conj = np.conj(phase_b)
-        P = phase_t * phase_b_conj
-
-        # Differences
-        Dt_x = dt_x - db_x;  Dt_y = dt_y - db_y
-
-        results = []
-        for (d2t, d2b, dth_t_mu, dth_t_nu, dth_b_mu, dth_b_nu, Dt_mu, Dt_nu) in [
-            (d2t_xx, d2b_xx, dt_x, dt_x, db_x, db_x, Dt_x, Dt_x),  # xx
-            (d2t_yy, d2b_yy, dt_y, dt_y, db_y, db_y, Dt_y, Dt_y),  # yy
-            (d2t_xy, d2b_xy, dt_x, dt_y, db_x, db_y, Dt_x, Dt_y),  # xy
-        ]:
-            d2V = np.zeros((num_k, 2, 2), dtype=np.complex128)
-            d2V[:, 0, 0] = gp * (1j * (d2t - d2b) - Dt_mu * Dt_nu) * P
-            d2V[:, 0, 1] = gm * (1j * d2t - dth_t_mu * dth_t_nu) * phase_t
-            d2V[:, 1, 0] = gm * (-1j * d2b - dth_b_mu * dth_b_nu) * phase_b_conj
-            results.append(d2V)
-
-        return results[0], results[1], results[2]
-
     def get_generalized_derivative_matrices(self, k_points):
         """
         w_munu = d^2H / dk_mu dk_nu for the full Hamiltonian.
@@ -622,117 +450,18 @@ class TwistedBPModel:
         pf_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
         wxx_b, wyy_b, wxy_b = self._layer_curvature(k_points, self.twist_angle, pf_b)
 
-        # Interlayer coupling second derivatives
-        d2V_xx, d2V_yy, d2V_xy = self._coupling_curvature(k_points)
+        # Interlayer coupling second derivatives are also zeros since we assume a constant coupling strength
 
         results = []
-        for w_t, w_b, d2V in [(wxx_t, wxx_b, d2V_xx),
-                               (wyy_t, wyy_b, d2V_yy),
-                               (wxy_t, wxy_b, d2V_xy)]:
+        for w_t, w_b in [(wxx_t, wxx_b),
+                               (wyy_t, wyy_b),
+                               (wxy_t, wxy_b)]:
             w = np.zeros((num_k, 4, 4), dtype=np.complex128)
             w[:, :2, :2] = w_t
             w[:, 2:4, 2:4] = w_b
-            w[:, :2, 2:4] = d2V
-            w[:, 2:4, :2] = d2V.conj().transpose((0, 2, 1))
             results.append(w)
 
         return results[0], results[1], results[2]
-
-
-def verify_coupling_derivatives(N_top=1, N_bottom=1, twist_angle=np.pi/2,
-                                 k_test=None, delta=1e-6):
-    """
-    Verify analytic coupling derivatives against finite differences.
-
-    Tests:
-    1. Hermiticity of vx, vy, w_xx, w_yy, w_xy
-    2. dH/dk_x vs (H(k+δx) - H(k-δx)) / (2δ)
-    3. dH/dk_y vs (H(k+δy) - H(k-δy)) / (2δ)
-    4. d²H/dk_x² vs (H(k+δx) + H(k-δx) - 2H(k)) / δ²
-    5. d²H/dk_y² vs (H(k+δy) + H(k-δy) - 2H(k)) / δ²
-    6. d²H/dk_xdk_y vs finite difference of dH/dk_x w.r.t. k_y
-    """
-    if k_test is None:
-        k_test = np.array([[0.05, 0.03]])
-    else:
-        k_test = np.atleast_2d(k_test)
-
-    model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
-
-    print("=" * 60)
-    print("Verification of coupling derivatives")
-    print(f"  N_top={N_top}, N_bottom={N_bottom}, twist={np.degrees(twist_angle):.1f} deg")
-    print(f"  k_test = {k_test[0]}, delta = {delta}")
-    print("=" * 60)
-
-    # Analytic
-    H0 = model.get_hamiltonians(k_test)
-    vx, vy = model.get_velocity_matrices(k_test)
-    wxx, wyy, wxy = model.get_generalized_derivative_matrices(k_test)
-
-    # 1. Hermiticity
-    print("\n[1] Hermiticity check:")
-    for name, M in [('vx', vx), ('vy', vy), ('wxx', wxx), ('wyy', wyy), ('wxy', wxy)]:
-        err = np.max(np.abs(M - M.conj().transpose((0, 2, 1))))
-        status = "OK" if err < 1e-12 else "FAIL"
-        print(f"  {name}: max|M - M†| = {err:.2e}  [{status}]")
-
-    # Finite difference stencils
-    dx = np.array([[delta, 0.0]])
-    dy = np.array([[0.0, delta]])
-
-    H_px = model.get_hamiltonians(k_test + dx)
-    H_mx = model.get_hamiltonians(k_test - dx)
-    H_py = model.get_hamiltonians(k_test + dy)
-    H_my = model.get_hamiltonians(k_test - dy)
-
-    # 2. First derivatives
-    vx_fd = (H_px - H_mx) / (2 * delta)
-    vy_fd = (H_py - H_my) / (2 * delta)
-
-    print("\n[2] First derivative (dH/dk) check:")
-    err_vx = np.max(np.abs(vx[0] - vx_fd[0]))
-    err_vy = np.max(np.abs(vy[0] - vy_fd[0]))
-    print(f"  dH/dk_x: max error = {err_vx:.2e}  [{'OK' if err_vx < 1e-4 else 'FAIL'}]")
-    print(f"  dH/dk_y: max error = {err_vy:.2e}  [{'OK' if err_vy < 1e-4 else 'FAIL'}]")
-
-    # Show coupling block specifically
-    err_vx_coup = np.max(np.abs(vx[0, :2, 2:4] - vx_fd[0, :2, 2:4]))
-    err_vy_coup = np.max(np.abs(vy[0, :2, 2:4] - vy_fd[0, :2, 2:4]))
-    print(f"  dV/dk_x (coupling only): max error = {err_vx_coup:.2e}")
-    print(f"  dV/dk_y (coupling only): max error = {err_vy_coup:.2e}")
-
-    # 3. Second derivatives
-    wxx_fd = (H_px + H_mx - 2 * H0) / delta**2
-    wyy_fd = (H_py + H_my - 2 * H0) / delta**2
-
-    # For wxy: use d/dk_y of dH/dk_x
-    vx_py = model.get_velocity_matrices(k_test + dy)[0]
-    vx_my = model.get_velocity_matrices(k_test - dy)[0]
-    wxy_fd = (vx_py - vx_my) / (2 * delta)
-
-    print("\n[3] Second derivative (d²H/dk²) check:")
-    err_wxx = np.max(np.abs(wxx[0] - wxx_fd[0]))
-    err_wyy = np.max(np.abs(wyy[0] - wyy_fd[0]))
-    err_wxy = np.max(np.abs(wxy[0] - wxy_fd[0]))
-    print(f"  d²H/dk_x²:    max error = {err_wxx:.2e}  [{'OK' if err_wxx < 1e-2 else 'FAIL'}]")
-    print(f"  d²H/dk_y²:    max error = {err_wyy:.2e}  [{'OK' if err_wyy < 1e-2 else 'FAIL'}]")
-    print(f"  d²H/dk_xdk_y: max error = {err_wxy:.2e}  [{'OK' if err_wxy < 1e-2 else 'FAIL'}]")
-
-    # Show coupling block specifically
-    err_wxx_coup = np.max(np.abs(wxx[0, :2, 2:4] - wxx_fd[0, :2, 2:4]))
-    err_wyy_coup = np.max(np.abs(wyy[0, :2, 2:4] - wyy_fd[0, :2, 2:4]))
-    err_wxy_coup = np.max(np.abs(wxy[0, :2, 2:4] - wxy_fd[0, :2, 2:4]))
-    print(f"  d²V/dk_x²    (coupling only): max error = {err_wxx_coup:.2e}")
-    print(f"  d²V/dk_y²    (coupling only): max error = {err_wyy_coup:.2e}")
-    print(f"  d²V/dk_xdk_y (coupling only): max error = {err_wxy_coup:.2e}")
-
-    print("\n" + "=" * 60)
-    all_ok = (err_vx < 1e-4 and err_vy < 1e-4 and
-              err_wxx < 1e-2 and err_wyy < 1e-2 and err_wxy < 1e-2)
-    print(f"Overall: {'ALL PASSED' if all_ok else 'SOME CHECKS FAILED'}")
-    print("=" * 60)
-
 
 # ============================================================
 # Standalone analysis functions
@@ -2260,7 +1989,7 @@ def plot_exciton_analysis(Omega_S, osc_data, shift_weight_data, E_range=(0.0, 1.
 
 
 def _resolve_degenerate_excitons(Omega_S, A_coeff, r_b_x_flat, r_b_y_flat,
-                                  degen_tol=1e-4):
+                                  degen_tol=1e-3):
     """
     Rotate degenerate exciton subspaces so that each state is an eigenstate
     of polarization (x-bright or y-bright), rather than an arbitrary mixture.
@@ -2743,56 +2472,52 @@ if __name__ == "__main__":
 
     # # Z-direction (out-of-plane) Shift Current
     # # --------------------------------------------
-    # calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                           n_k=240, n_E=250,
-    #                         #   band_window=[0,1,2,2],
-    #                           E_range=erange, k_range=G_moire/2)
+    calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                              n_k=240, n_E=250,
+                            #   band_window=[0,1,2,2],
+                              E_range=erange, k_range=G_moire/2)
 
     # BSE Excitonic Z-Shift Current
     # --------------------------------------------
-    # calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                n_k_bse=30, n_val=2, n_cond=2,
-    #                                E_range=erange, k_range=G_moire/2,
-    #                                kappa=4.0, r0=5.0,)
+    calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                                   n_k_bse=30, n_val=2, n_cond=2,
+                                   E_range=erange, k_range=G_moire/2,
+                                   kappa=4.0, r0=5.0,)
 
     # Exciton Oscillator Strength (stem plot)
     # --------------------------------------------
-    # plot_exciton_oscillator_strength(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                   E_range=erange, eta=0.010,
-    #                                   k_range=G_moire/2, n_k_bse=30,
-    #                                   n_val=2, n_cond=2,
-    #                                   kappa=5.0, r0=5.4,
-    #                                   polarization='both')
+    plot_exciton_oscillator_strength(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                                      E_range=erange, eta=0.010,
+                                      k_range=G_moire/2, n_k_bse=30,
+                                      n_val=2, n_cond=2,
+                                      kappa=5.0, r0=5.4,
+                                      polarization='both')
 
     # BSE Excitonic Absorbance
     # --------------------------------------------
-    # calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                           E_range=erange, n_E=500, eta=0.010,
-    #                           k_range=G_moire/2, n_k_bse=30,
-    #                           n_val=2, n_cond=2,
-    #                           kappa=5.0, r0=5.4,
-    #                           plot_ipa_comparison=True,)
+    calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                              E_range=erange, n_E=500, eta=0.010,
+                              k_range=G_moire/2, n_k_bse=30,
+                              n_val=2, n_cond=2,
+                              kappa=5.0, r0=5.4,
+                              plot_ipa_comparison=True,)
     
     # Excitonic Absorbance
     # --------------------------------------------
-    # analyze_exciton_wavefunction(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                 E_range=erange, eta=0.010,
-    #                                 k_range=G_moire/2, n_k_bse=30,
-    #                                 n_val=2, n_cond=2,
-    #                                 thickness=5.2,
-    #                                 kappa=5.0, r0=5.4,
-    #                                 n_excitons=4,
-    #                                 )
+    analyze_exciton_wavefunction(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                                    E_range=erange, eta=0.010,
+                                    k_range=G_moire/2, n_k_bse=30,
+                                    n_val=2, n_cond=2,
+                                    thickness=5.2,
+                                    kappa=5.0, r0=5.4,
+                                    n_excitons=4,
+                                    )
 
     # Excitonic Levels
     # --------------------------------------------
-    # plot_exciton_level(N_top=n_top, N_bottom=[n_top,10], twist_angle=twist_angle,
-    #                                   E_range=erange,
-    #                                   k_range=G_moire/2, n_k_bse=30,
-    #                                   n_val=2, n_cond=2,
-    #                                   kappa=5.0, r0=5.4,
-    #                                   E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,)
-
-    # Verification of coupling derivatives
-    # --------------------------------------------
-    verify_coupling_derivatives(N_top=3, N_bottom=3, twist_angle=np.pi/2)
+    plot_exciton_level(N_top=n_top, N_bottom=[n_top,10], twist_angle=twist_angle,
+                                      E_range=erange,
+                                      k_range=G_moire/2, n_k_bse=30,
+                                      n_val=2, n_cond=2,
+                                      kappa=5.0, r0=5.4,
+                                      E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,)
