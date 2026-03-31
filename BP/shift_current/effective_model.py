@@ -36,7 +36,7 @@ class TwistedBPModel:
         self.twist_angle = twist_angle
 
         # effective interface coupling strength (in eV)
-        self.coupling = 0.100
+        self.coupling = 0.095
 
         # tight-binding parameters
         self.a1 = 2.22
@@ -1115,6 +1115,43 @@ def calculate_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"Saved Shift Current Figure: {fname}")
     return omegas, results
 
+
+def plot_bandgap_scaling(N_top=1, N_bottom=1, twist_angle=0.0,
+                         E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,):
+    """
+    Plot how the gap changes with number of bottom layer changing.
+    """
+    # Get the bandgap of my model
+    gap_level = []
+    for N_bot in range(N_bottom[0], N_bottom[1]):
+        model = TwistedBPModel(N_top=N_top, N_bottom=N_bot, twist_angle=twist_angle)
+        k_points = np.array([[0.0, 0.0]])
+        evals, _ = np.linalg.eigh(model.get_hamiltonians(k_points))
+        mid = evals.shape[1] // 2
+        E_gap = evals[0, mid] - evals[0, mid-1]
+        gap_level.append(E_gap)
+        print(f"N_bottom={N_bot}: Bandgap = {E_gap:.3f} eV")
+
+    # Get the analytic levels, ref: Huang et al., Science 386, 526–531 (2024)
+    level_list = np.linspace(N_bottom[0], N_bottom[1]+3, 500)
+    Y_bright = E_g - 2 * gamma_c * np.cos(np.pi/(level_list + N_top + 1)) + 2 * gamma_v * np.cos(np.pi/(N_top + 1))
+    X_bright = E_g - 2 * gamma_c * np.cos(np.pi/(level_list + N_top + 1)) + 2 * gamma_v * np.cos(np.pi/(level_list + 1))
+    gap_level = np.array(gap_level)
+
+    # Plotting
+    plt.figure(figsize=(5, 5))
+    plt.plot(level_list, X_bright, label='X-bright (analytic)', color='red', ls='--')
+    plt.plot(level_list, Y_bright, label='Y-bright (analytic)', color='blue', ls='--')
+    plt.scatter(range(N_bottom[0], N_bottom[1]), gap_level, label='model', color='red', marker='o')
+    # plt.tight_layout()
+    plt.ylim(0.2,1.6)
+    plt.legend()
+    plt.xlabel('N_bottom')
+    plt.ylabel('Bandgap (eV)')
+    fname = f"gap.png"
+    plt.savefig(fname, dpi=300)
+    plt.close()
+    print(f"\nSaved: {fname}")
 
 # =====================================================================
 #  Bethe-Salpeter Equation (BSE) — Excitonic Z-Shift Current
@@ -2381,7 +2418,7 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
 
         # 9. Select excitons in energy range
         mask = (Omega_S >= E_range[0]) & (Omega_S <= E_range[1])
-        idx = np.where(mask)[0][:100]
+        idx = np.where(mask)[0]
         E_sel = Omega_S[idx]
 
         pol_list = ['x', 'y']
@@ -2400,9 +2437,9 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
         bright_level.append(bright_exciton)
 
     # 10. Get the analytic levels, ref: Huang et al., Science 386, 526–531 (2024)
-    level_list = np.linspace(N_bottom[0], N_bottom[1]+3, 500)
-    X_bright = E_g - 2 * gamma_c * np.cos(np.pi/(level_list + N_top + 1)) + 2 * gamma_v * np.cos(np.pi/(N_top + 1))
-    Y_bright = E_g - 2 * gamma_c * np.cos(np.pi/(level_list + N_top + 1)) + 2 * gamma_v * np.cos(np.pi/(level_list + 1))
+    level_list = np.linspace(N_bottom[0], N_bottom[1]+2, 500)
+    Y_bright = E_g - 2 * gamma_c * np.cos(np.pi/(level_list + N_top + 1)) + 2 * gamma_v * np.cos(np.pi/(N_top + 1))
+    X_bright = E_g - 2 * gamma_c * np.cos(np.pi/(level_list + N_top + 1)) + 2 * gamma_v * np.cos(np.pi/(level_list + 1))
     bright_level = np.array(bright_level)
 
     # 11. Plotting
@@ -2430,8 +2467,10 @@ if __name__ == "__main__":
     n_top = 3
     n_bottom = 3
     twist_angle = np.pi / 2
+    kappa=5.0
+    r0=6.0
     # twist_angle = 0.0
-    erange = (0.0, 1.0)
+    erange = (0.0, 0.8)
 
     # single k point test
     # --------------------------------------------
@@ -2441,83 +2480,89 @@ if __name__ == "__main__":
     # print(H_test[0])
     # print("Eigenvalues at Gamma:", np.linalg.eigvalsh(H_test[0]))
 
-    # Band structure
-    # # --------------------------------------------
-    cal_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-              k_fine_steps=200, y_lim=(-0.5,1.0))
+    # # Band structure
+    # # # --------------------------------------------
+    # cal_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #           k_fine_steps=200, y_lim=(-0.5,1.0))
 
-    # # 3D Band Structure
-    # # --------------------------------------------
-    # plot_3d_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #               k_range=G_moire/2, n_grid=60,
-    #               view_elev=15, view_azim=45)
+    # # # 3D Band Structure
+    # # # --------------------------------------------
+    # # plot_3d_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    # #               k_range=G_moire/2, n_grid=60,
+    # #               view_elev=15, view_azim=45)
                   
-    # # Optical Conductivity
-    # # --------------------------------------------
-    calculate_optical_conductivity(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                   n_k=240, n_E=500,eta=0.010,
-                                   k_range=G_moire/2, E_range=erange)
+    # # # Optical Conductivity
+    # # # --------------------------------------------
+    # calculate_optical_conductivity(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                n_k=240, n_E=500,eta=0.010,
+    #                                k_range=G_moire/2, E_range=erange)
                                    
-    # # Matrix Element Map (VBM -> CBM)
-    # # --------------------------------------------
-    plot_transition_matrix_elements(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                    band_indices=(0, 2),
-                                    k_range=G_moire/2, n_k=160)
+    # # # Matrix Element Map (VBM -> CBM)
+    # # # --------------------------------------------
+    # plot_transition_matrix_elements(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                 band_indices=(1, 2),
+    #                                 k_range=G_moire/2, n_k=160)
     
-    # # Shift Current Calculation
-    # # --------------------------------------------   
-    calculate_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle, 
-                            n_k=240, n_E=100,
-                            E_range=erange, k_range=G_moire/2,)
+    # # # Bandgap scaling with N_bottom
+    # # # --------------------------------------------
+    # plot_bandgap_scaling(N_top=n_top, N_bottom=[n_top,10], twist_angle=twist_angle,
+    #                         E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,)
 
-    # # Z-direction (out-of-plane) Shift Current
-    # # --------------------------------------------
-    calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                              n_k=240, n_E=250,
-                            #   band_window=[0,1,2,2],
-                              E_range=erange, k_range=G_moire/2)
 
-    # BSE Excitonic Z-Shift Current
-    # --------------------------------------------
-    calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                   n_k_bse=30, n_val=2, n_cond=2,
-                                   E_range=erange, k_range=G_moire/2,
-                                   kappa=4.0, r0=5.0,)
+    # # # Shift Current Calculation
+    # # # --------------------------------------------   
+    # calculate_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle, 
+    #                         n_k=240, n_E=100,
+    #                         E_range=erange, k_range=G_moire/2,)
 
-    # Exciton Oscillator Strength (stem plot)
-    # --------------------------------------------
-    plot_exciton_oscillator_strength(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                      E_range=erange, eta=0.010,
-                                      k_range=G_moire/2, n_k_bse=30,
-                                      n_val=2, n_cond=2,
-                                      kappa=5.0, r0=5.4,
-                                      polarization='both')
+    # # # Z-direction (out-of-plane) Shift Current
+    # # # --------------------------------------------
+    # calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                           n_k=240, n_E=250,
+    #                         #   band_window=[0,1,2,2],
+    #                           E_range=erange, k_range=G_moire/2)
 
-    # BSE Excitonic Absorbance
-    # --------------------------------------------
-    calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                              E_range=erange, n_E=500, eta=0.010,
-                              k_range=G_moire/2, n_k_bse=30,
-                              n_val=2, n_cond=2,
-                              kappa=5.0, r0=5.4,
-                              plot_ipa_comparison=True,)
+    # # # BSE Excitonic Z-Shift Current
+    # # # --------------------------------------------
+    # calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                n_k_bse=30, n_val=2, n_cond=2,
+    #                                E_range=erange, k_range=G_moire/2,
+    #                                kappa=kappa, r0=r0,)
+
+    # # # Exciton Oscillator Strength (stem plot)
+    # # # --------------------------------------------
+    # plot_exciton_oscillator_strength(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                   E_range=erange, eta=0.010,
+    #                                   k_range=G_moire/2, n_k_bse=30,
+    #                                   n_val=2, n_cond=2,
+    #                                   kappa=kappa, r0=r0,
+    #                                   polarization='both')
+
+    # # # BSE Excitonic Absorbance
+    # # # --------------------------------------------
+    # calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                           E_range=erange, n_E=500, eta=0.010,
+    #                           k_range=G_moire/2, n_k_bse=30,
+    #                           n_val=2, n_cond=2,
+    #                           kappa=kappa, r0=r0,
+    #                           plot_ipa_comparison=True,)
     
-    # Excitonic Absorbance
-    # --------------------------------------------
-    analyze_exciton_wavefunction(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                    E_range=erange, eta=0.010,
-                                    k_range=G_moire/2, n_k_bse=30,
-                                    n_val=2, n_cond=2,
-                                    thickness=5.2,
-                                    kappa=5.0, r0=5.4,
-                                    n_excitons=4,
-                                    )
+    # # # Excitonic Absorbance
+    # # # --------------------------------------------
+    # analyze_exciton_wavefunction(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                 E_range=erange, eta=0.010,
+    #                                 k_range=G_moire/2, n_k_bse=30,
+    #                                 n_val=2, n_cond=2,
+    #                                 thickness=5.2,
+    #                                 kappa=kappa, r0=r0,
+    #                                 n_excitons=4,
+    #                                 )
 
-    # Excitonic Levels
-    # --------------------------------------------
-    plot_exciton_level(N_top=n_top, N_bottom=[n_top,10], twist_angle=twist_angle,
+    # # Excitonic Levels
+    # # --------------------------------------------
+    plot_exciton_level(N_top=n_top, N_bottom=[n_bottom,9], twist_angle=twist_angle,
                                       E_range=erange,
                                       k_range=G_moire/2, n_k_bse=30,
                                       n_val=2, n_cond=2,
-                                      kappa=5.0, r0=5.4,
+                                      kappa=kappa, r0=r0,
                                       E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,)
