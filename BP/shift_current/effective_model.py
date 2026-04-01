@@ -36,7 +36,7 @@ class TwistedBPModel:
         self.twist_angle = twist_angle
 
         # effective interface coupling strength (in eV)
-        self.coupling = 0.095
+        self.coupling = 0.095 # For 2+2/3+3, 0.095 is a good fit . For 4+4, 0.07 is a good fit.
 
         # tight-binding parameters
         self.a1 = 2.22
@@ -3144,6 +3144,279 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
     return Omega_S, A_coeff, bright_idx
 
 
+def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
+                                         twist_angle=0.0,
+                                         E_range=(0.0, 1.0), n_E=500, eta=0.010,
+                                         k_range=0.15, n_k_bse=30,
+                                         n_val=2, n_cond=2,
+                                         thickness=5.2,
+                                         kappa=2.5, r0=5.0,
+                                         band_window=None, save_prefix=""):
+    r"""
+    Scan different (N_top, N_bottom) stacks and correlate:
+      1) dipole of the lowest-energy x-bright exciton
+      2) first peak of sigma^{zxx}(omega)
+
+    Exciton dipole is extracted from layer-resolved electron/hole densities:
+        p_z = <z_e> - <z_h>
+    where <z_e/h> are computed from the same weights used in
+    `analyze_exciton_wavefunction`.
+
+    Parameters
+    ----------
+    layer_pairs : list[tuple[int, int]] or None
+        Explicit (N_top, N_bottom) list. Example: [(2, 2), (3, 3)].
+        If None, uses symmetric pairs from `N_layers`: [(N, N), ...].
+    N_layers : iterable[int]
+        Layer counts used when `layer_pairs` is None.
+    """
+    if layer_pairs is None:
+        layer_pairs = [(int(n), int(n)) for n in N_layers]
+    if len(layer_pairs) == 0:
+        raise ValueError("layer_pairs is empty.")
+
+    def _first_peak_idx(x, y):
+        y_abs = np.abs(y)
+        if len(y_abs) < 3:
+            return int(np.argmax(y_abs))
+        cand = np.where((y_abs[1:-1] > y_abs[:-2]) & (y_abs[1:-1] >= y_abs[2:]))[0] + 1
+        if len(cand) == 0:
+            return int(np.argmax(y_abs))
+        return int(cand[0])
+
+    results = []
+
+    print("=" * 68)
+    print("Scan: Lowest x-bright exciton dipole vs first zxx shift-current peak")
+    print("=" * 68)
+
+    for N_top, N_bottom in layer_pairs:
+        print(f"\n--- Case N_top/N_bottom = {N_top}/{N_bottom} ---")
+
+        # 1. Model and k-grid
+        model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
+
+        kx = np.linspace(-k_range, k_range, n_k_bse)
+        ky = np.linspace(-k_range, k_range, n_k_bse)
+        KX, KY = np.meshgrid(kx, ky)
+        k_points = np.column_stack([KX.flatten(), KY.flatten()])
+        Nk = len(k_points)
+
+        # 2. Single-particle solve
+        H_stack = model.get_hamiltonians(k_points)
+        evals, evecs = np.linalg.eigh(H_stack)
+        Nb = evals.shape[1]
+
+        mid = Nb // 2
+        if band_window is not None:
+            v_idx = np.arange(band_window[0], band_window[1] + 1)
+            c_idx = np.arange(band_window[2], band_window[3] + 1)
+        else:
+            v_idx = np.arange(mid - n_val, mid)
+            c_idx = np.arange(mid, mid + n_cond)
+        Nv = len(v_idx)
+        Nc = len(c_idx)
+
+        # 3. Dipole matrix elements r^x/r^y in active space
+        vx_orb, vy_orb = model.get_velocity_matrices(k_points)
+        U = evecs
+        U_dag = np.conj(np.transpose(U, (0, 2, 1)))
+        vx_eig = U_dag @ vx_orb @ U
+        vy_eig = U_dag @ vy_orb @ U
+
+        E_v_arr = evals[:, v_idx]
+        E_c_arr = evals[:, c_idx]
+        dE = E_c_arr[:, None, :] - E_v_arr[:, :, None]  # (Nk, Nv, Nc)
+
+        eps_denom = 1e-5
+        r_b = {}
+        for b_dir, v_b in [('x', vx_eig), ('y', vy_eig)]:
+            vb_cv = np.transpose(v_b[:, c_idx, :][:, :, v_idx], (0, 2, 1))
+            rb = np.zeros_like(vb_cv)
+            valid = np.abs(dE) > eps_denom
+            rb[valid] = vb_cv[valid] / (1j * dE[valid])
+            r_b[b_dir] = rb
+
+        # 4. Build and diagonalize BSE
+        a_lat = model.a_lat
+        b_lat = model.b_lat
+        A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
+        V_uc = A_uc * thickness * (N_top + N_bottom)
+
+        H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
+                                      kappa=kappa, r0=r0,
+                                      N_top=N_top, N_bottom=N_bottom)
+        dim_bse_mat = H_bse.shape[0]
+        n_exciton_max = min(1000, dim_bse_mat - 2)
+        if dim_bse_mat > 10000:
+            Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
+            sort_idx = np.argsort(Omega_S)
+            Omega_S = Omega_S[sort_idx]
+            A_coeff = A_coeff[:, sort_idx]
+        else:
+            Omega_S, A_coeff = scipy_eigh(H_bse, driver='evd')
+        del H_bse
+
+        dim_bse = Nv * Nc * Nk
+        r_x_flat = r_b['x'].reshape(dim_bse)
+        r_y_flat = r_b['y'].reshape(dim_bse)
+
+        # Resolve degeneracy to x/y-polarized basis.
+        A_coeff = _resolve_degenerate_excitons(Omega_S, A_coeff, r_x_flat, r_y_flat)
+
+        d_x_all = A_coeff.conj().T @ r_x_flat
+        d_y_all = A_coeff.conj().T @ r_y_flat
+        osc_x = np.abs(d_x_all)**2
+        osc_y = np.abs(d_y_all)**2
+
+        in_range = (Omega_S >= E_range[0]) & (Omega_S <= E_range[1])
+        x_bright = np.where(in_range & (osc_x >= osc_y))[0]
+        if len(x_bright) == 0:
+            # Fallback: use strongest x-polarized state in the range.
+            x_bright = np.where(in_range)[0]
+            if len(x_bright) == 0:
+                raise RuntimeError(f"No exciton found in E_range for N={N_top}/{N_bottom}")
+            idx_sel = x_bright[np.argmax(osc_x[x_bright])]
+        else:
+            idx_sel = x_bright[np.argmin(Omega_S[x_bright])]
+
+        # 5. Exciton electron/hole layer distributions -> dipole p_z
+        A_S = A_coeff[:, idx_sel]
+        A_3d = A_S.reshape(Nk, Nv, Nc)
+        w_e_ck = np.sum(np.abs(A_3d)**2, axis=1)  # (Nk, Nc)
+        w_h_vk = np.sum(np.abs(A_3d)**2, axis=2)  # (Nk, Nv)
+
+        U_c = evecs[:, :, c_idx]  # (Nk, Nb, Nc)
+        U_v = evecs[:, :, v_idx]  # (Nk, Nb, Nv)
+
+        rho_e = np.zeros(Nb)
+        rho_h = np.zeros(Nb)
+        for ic in range(Nc):
+            uc_sq = np.abs(U_c[:, :, ic])**2
+            rho_e += np.sum(uc_sq * w_e_ck[:, ic:ic+1], axis=0)
+        for iv in range(Nv):
+            uv_sq = np.abs(U_v[:, :, iv])**2
+            rho_h += np.sum(uv_sq * w_h_vk[:, iv:iv+1], axis=0)
+
+        rho_e /= np.sum(rho_e)
+        rho_h /= np.sum(rho_h)
+
+        z_orb = np.zeros(Nb)
+        z_orb[0:2] = +thickness * N_top / 2.0
+        if Nb == 4:
+            z_orb[2:4] = -thickness * N_bottom / 2.0
+
+        z_e = float(np.dot(rho_e, z_orb))
+        z_h = float(np.dot(rho_h, z_orb))
+        dipole_z = z_e - z_h
+
+        # 6. zxx shift current from excitonic spectrum
+        z_eig = U_dag @ np.diag(z_orb) @ U
+        z_diag = np.real(np.diagonal(z_eig, axis1=1, axis2=2))
+        z_v = z_diag[:, v_idx]
+        z_c = z_diag[:, c_idx]
+        delta_z = z_v[:, :, None] - z_c[:, None, :]
+        delta_z_flat = delta_z.reshape(dim_bse)
+
+        g_xz_S = A_coeff.conj().T @ (delta_z_flat * r_x_flat)
+        integrand_S = np.real(np.conj(d_x_all) * g_xz_S)
+
+        omegas = np.linspace(E_range[0], E_range[1], n_E)
+        diff = omegas[:, None] - Omega_S[None, :]
+        lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+        sigma_zxx = (lorentz @ integrand_S) / Nk
+
+        e_charge = 1.602176634e-19
+        hbar = 1.054571817e-34
+        prefactor = (2 * np.pi * e_charge**2) / (hbar * V_uc) * 1E6
+        sigma_zxx *= prefactor
+
+        i_pk = _first_peak_idx(omegas, sigma_zxx)
+        peak_energy = float(omegas[i_pk])
+        peak_value = float(sigma_zxx[i_pk])
+
+        rho_e_top = float(np.sum(rho_e[:2]))
+        rho_h_top = float(np.sum(rho_h[:2]))
+        rho_e_bot = float(np.sum(rho_e[2:])) if Nb == 4 else 0.0
+        rho_h_bot = float(np.sum(rho_h[2:])) if Nb == 4 else 0.0
+
+        print(f"  Lowest x-bright exciton: E={Omega_S[idx_sel]:.4f} eV, |d_x|^2={osc_x[idx_sel]:.4e}")
+        print(f"  Layer weights: e(top/bot)=({rho_e_top:.3f}/{rho_e_bot:.3f}), "
+              f"h(top/bot)=({rho_h_top:.3f}/{rho_h_bot:.3f})")
+        print(f"  Dipole p_z=<z_e>-<z_h> = {dipole_z:.4f} A")
+        print(f"  First |sigma^{{zxx}}| peak: omega={peak_energy:.4f} eV, sigma={peak_value:.4f} uA/V^2")
+
+        results.append({
+            'N_top': int(N_top),
+            'N_bottom': int(N_bottom),
+            'exciton_energy': float(Omega_S[idx_sel]),
+            'osc_x': float(osc_x[idx_sel]),
+            'dipole_z': dipole_z,
+            'dipole_z_abs': float(np.abs(dipole_z)),
+            'rho_e_top': rho_e_top,
+            'rho_e_bottom': rho_e_bot,
+            'rho_h_top': rho_h_top,
+            'rho_h_bottom': rho_h_bot,
+            'first_peak_energy': peak_energy,
+            'first_peak_sigma_zxx': peak_value,
+            'first_peak_sigma_zxx_abs': float(np.abs(peak_value)),
+        })
+
+    # 7. Summary plots
+    labels = [f"{d['N_top']}/{d['N_bottom']}" for d in results]
+    x_idx = np.arange(len(results))
+    dipoles = np.array([d['dipole_z_abs'] for d in results])
+    peaks = np.array([d['first_peak_sigma_zxx_abs'] for d in results])
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    axes[0].plot(x_idx, dipoles, 'o-', color='tab:red', lw=2, label=r'$|p_z|$')
+    axes[0].set_xticks(x_idx)
+    axes[0].set_xticklabels(labels)
+    axes[0].set_xlabel('N_top/N_bottom')
+    axes[0].set_ylabel(r'$|p_z|$ (A)')
+    axes[0].set_title('Lowest x-bright Exciton Dipole')
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].plot(x_idx, peaks, 's--', color='tab:blue', lw=2, label=r'first $|\sigma^{zxx}|$ peak')
+    axes[1].set_xticks(x_idx)
+    axes[1].set_xticklabels(labels)
+    axes[1].set_xlabel('N_top/N_bottom')
+    axes[1].set_ylabel(r'$|\sigma^{zxx}_{peak}|$ ($\mu$A/V$^2$)')
+    axes[1].set_title('First zxx Peak Amplitude')
+    axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    fname_trend = f"EM_xexciton_dipole_and_shift_peak{save_prefix}.png"
+    plt.savefig(fname_trend, dpi=300)
+    plt.close()
+
+    plt.figure(figsize=(6, 5))
+    plt.scatter(dipoles, peaks, c=np.arange(len(results)), cmap='viridis', s=80)
+    for i, lab in enumerate(labels):
+        plt.text(dipoles[i], peaks[i], f" {lab}", fontsize=9, va='bottom', ha='left')
+    plt.xlabel(r'$|p_z|$ (A)')
+    plt.ylabel(r'$|\sigma^{zxx}_{peak}|$ ($\mu$A/V$^2$)')
+    plt.title('Relation: Exciton Dipole vs Shift-Current Peak')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    fname_corr = f"EM_xexciton_dipole_vs_shift_peak{save_prefix}.png"
+    plt.savefig(fname_corr, dpi=300)
+    plt.close()
+
+    print("\n" + "=" * 68)
+    print("Summary (lowest x-bright exciton vs first zxx peak)")
+    for d in results:
+        print(f"  N={d['N_top']}/{d['N_bottom']}: "
+              f"|p_z|={d['dipole_z_abs']:.4f} A, "
+              f"|sigma_peak|={d['first_peak_sigma_zxx_abs']:.4f} uA/V^2, "
+              f"peak@{d['first_peak_energy']:.4f} eV")
+    print(f"Saved: {fname_trend}")
+    print(f"Saved: {fname_corr}")
+
+    return results
+
+
 def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
                                       E_range=(0.0, 1.0),
                                       k_range=0.15, n_k_bse=30,
@@ -3306,7 +3579,7 @@ if __name__ == "__main__":
     kappa=5.0
     r0=6.0
     # twist_angle = 0.0
-    erange = (0.0, 0.8)
+    erange = (0.0, 0.99)
 
     # single k point test
     # --------------------------------------------
@@ -3403,15 +3676,14 @@ if __name__ == "__main__":
     #                                   kappa=kappa, r0=r0,
     #                                   E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,)
 
-    # # Full Excitonic Shift Current (Eq. 10)
-    # # --------------------------------------------
-    calculate_excitonic_shift_current(
-        N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-        E_range=erange, n_E=200, eta=0.010,
-        k_range=G_moire/2, n_k_bse=30,
-        n_val=2, n_cond=2,
-        kappa=kappa, r0=r0,
-        n_exciton_keep=200,
-        plot_ipa_comparison=True,
-        band_window = [0, 1, 2, 3]
-    )
+
+    # study_x_exciton_dipole_vs_shift_peak(
+    #     layer_pairs=[(2, 2), (3, 3)],
+    #     twist_angle=twist_angle,
+    #     E_range=erange, n_E=500, eta=0.010,
+    #     k_range=G_moire/2, n_k_bse=30,
+    #     n_val=2, n_cond=2,
+    #     thickness=5.2,
+    #     kappa=kappa, r0=r0,
+    #     save_prefix="_N2N3"
+    # )
