@@ -96,53 +96,82 @@ class TwistedBPModel:
 
         return tAA, tAB, tAC, tAD, tADp, tACp
 
+    def _build_2x2_block(self, num_k, a, z):
+        """Build a 2x2 Hermitian block [[a, z], [z*, a]]."""
+        blk = np.zeros((num_k, 2, 2), dtype=np.complex128)
+        blk[:, 0, 0] = a
+        blk[:, 1, 1] = a
+        blk[:, 0, 1] = z
+        blk[:, 1, 0] = np.conj(z)
+        return blk
+
     def get_hamiltonians(self, k_points):
         """
         Compute the Hamiltonian in sublattice basis.
-        Each layer block is H = [[a, z], [z*, a]]
-        Interlayer coupling V_sub is a constant matrix.
+        Each layer is 4x4: two 2x2 sub-blocks (H_high, H_low) with different
+        interlayer prefactors cos(pi*(N-1)/(N+1)) and cos(pi*N/(N+1)).
+        Top layer ordering:    [[H_high, 0], [0, H_low]]
+        Bottom layer ordering: [[H_low, 0], [0, H_high]]
+        This places top_low and bot_low adjacent for easy coupling insertion.
+        Interlayer coupling V_sub connects only the H_low blocks.
         """
         k_points = np.atleast_2d(k_points)
         num_k = len(k_points)
 
-        # Top layer (untwisted)
-        prefactor = np.cos(np.pi * self.N_top / (self.N_top + 1))
+        # Top layer (untwisted) — 4x4: [[H_high, 0], [0, H_low]]
+        pf_low_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
+        pf_high_t = np.cos(np.pi * (self.N_top - 1) / (self.N_top + 1))
         tAA, tAB, tAC, tAD, tADp, tACp = self.basic_block(k_points, twist_angle=0.0)
-        a_t = tAA + tAD + prefactor * tADp
-        z_t = tAB + tAC + prefactor * tACp
-        ham_top = np.zeros((num_k, 2, 2), dtype=np.complex128)
-        ham_top[:, 0, 0] = a_t
-        ham_top[:, 1, 1] = a_t
-        ham_top[:, 0, 1] = z_t
-        ham_top[:, 1, 0] = np.conj(z_t)
+
+        a_t_high = tAA + tAD + pf_high_t * tADp
+        z_t_high = tAB + tAC + pf_high_t * tACp
+        a_t_low = tAA + tAD + pf_low_t * tADp
+        z_t_low = tAB + tAC + pf_low_t * tACp
+
+        ham_top = np.zeros((num_k, 4, 4), dtype=np.complex128)
+        ham_top[:, :2, :2] = self._build_2x2_block(num_k, a_t_high, z_t_high)
+        ham_top[:, 2:4, 2:4] = self._build_2x2_block(num_k, a_t_low, z_t_low)
 
         if self.N_bottom == 0:
             return ham_top
 
-        # Bottom layer (twisted)
-        prefactor = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
+        # Bottom layer (twisted) — 4x4: [[H_low, 0], [0, H_high]]
+        pf_low_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
+        pf_high_b = np.cos(np.pi * (self.N_bottom - 1) / (self.N_bottom + 1))
         tAA, tAB, tAC, tAD, tADp, tACp = self.basic_block(k_points, twist_angle=self.twist_angle)
-        a_b = tAA + tAD + prefactor * tADp
-        z_b = tAB + tAC + prefactor * tACp
-        ham_bot = np.zeros((num_k, 2, 2), dtype=np.complex128)
-        ham_bot[:, 0, 0] = a_b
-        ham_bot[:, 1, 1] = a_b
-        ham_bot[:, 0, 1] = z_b
-        ham_bot[:, 1, 0] = np.conj(z_b)
 
-        ham = np.zeros((num_k, 4, 4), dtype=np.complex128)
-        ham[:, :2, :2] = ham_top
-        ham[:, 2:4, 2:4] = ham_bot
+        a_b_low = tAA + tAD + pf_low_b * tADp
+        z_b_low = tAB + tAC + pf_low_b * tACp
+        a_b_high = tAA + tAD + pf_high_b * tADp
+        z_b_high = tAB + tAC + pf_high_b * tACp
 
-        # interlayer coupling
+        ham_bot = np.zeros((num_k, 4, 4), dtype=np.complex128)
+        ham_bot[:, :2, :2] = self._build_2x2_block(num_k, a_b_low, z_b_low)
+        ham_bot[:, 2:4, 2:4] = self._build_2x2_block(num_k, a_b_high, z_b_high)
+
+        # Full 8x8: top [0:4], bottom [4:8]
+        ham = np.zeros((num_k, 8, 8), dtype=np.complex128)
+        ham[:, :4, :4] = ham_top
+        ham[:, 4:8, 4:8] = ham_bot
+
+        # Interlayer coupling: V_sub connects all top subbands to all bottom subbands
+        # in the sublattice basis (independent of subband index)
         ham_inter = np.zeros((num_k, 2, 2), dtype=np.complex128)
         ham_inter[:, 0, 0] = self.coupling
         ham_inter[:, 0, 1] = self.coupling
         ham_inter[:, 1, 0] = self.coupling
         ham_inter[:, 1, 1] = self.coupling
 
-        ham[:, :2, 2:4] = ham_inter
-        ham[:, 2:4, :2] = ham_inter.conj().transpose((0, 2, 1))
+        # top_high [0:2] <-> bot_low [4:6], bot_high [6:8]
+        ham[:, 0:2, 4:6] = ham_inter
+        ham[:, 4:6, 0:2] = ham_inter.conj().transpose((0, 2, 1))
+        ham[:, 0:2, 6:8] = ham_inter
+        ham[:, 6:8, 0:2] = ham_inter.conj().transpose((0, 2, 1))
+        # top_low [2:4] <-> bot_low [4:6], bot_high [6:8]
+        ham[:, 2:4, 4:6] = ham_inter
+        ham[:, 4:6, 2:4] = ham_inter.conj().transpose((0, 2, 1))
+        ham[:, 2:4, 6:8] = ham_inter
+        ham[:, 6:8, 2:4] = ham_inter.conj().transpose((0, 2, 1))
 
         return ham
 
@@ -370,27 +399,41 @@ class TwistedBPModel:
         Calculate velocity matrices vx, vy for the full Hamiltonian.
         v = dH/dk (units: eV * Angstrom)
         Returns vx, vy each (Nk, dim_H, dim_H).
+        Top layer: [[v_high, 0], [0, v_low]]; Bottom layer: [[v_low, 0], [0, v_high]].
         """
         k_points = np.atleast_2d(k_points)
         num_k = len(k_points)
 
-        pf_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
-        vx_t, vy_t = self._layer_velocity(k_points, 0.0, pf_t)
+        pf_low_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
+        pf_high_t = np.cos(np.pi * (self.N_top - 1) / (self.N_top + 1))
+        vx_t_high, vy_t_high = self._layer_velocity(k_points, 0.0, pf_high_t)
+        vx_t_low, vy_t_low = self._layer_velocity(k_points, 0.0, pf_low_t)
+
+        # Top layer 4x4: [[high, 0], [0, low]]
+        vx_t = np.zeros((num_k, 4, 4), dtype=np.complex128)
+        vy_t = np.zeros((num_k, 4, 4), dtype=np.complex128)
+        vx_t[:, :2, :2] = vx_t_high;  vx_t[:, 2:4, 2:4] = vx_t_low
+        vy_t[:, :2, :2] = vy_t_high;  vy_t[:, 2:4, 2:4] = vy_t_low
 
         if self.N_bottom == 0:
             return vx_t, vy_t
 
-        pf_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
-        vx_b, vy_b = self._layer_velocity(k_points, self.twist_angle, pf_b)
+        pf_low_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
+        pf_high_b = np.cos(np.pi * (self.N_bottom - 1) / (self.N_bottom + 1))
+        vx_b_low, vy_b_low = self._layer_velocity(k_points, self.twist_angle, pf_low_b)
+        vx_b_high, vy_b_high = self._layer_velocity(k_points, self.twist_angle, pf_high_b)
 
-        # Interlayer coupling derivatives are all zeros since we assume a constant coupling strength
+        # Bottom layer 4x4: [[low, 0], [0, high]]
+        vx_b = np.zeros((num_k, 4, 4), dtype=np.complex128)
+        vy_b = np.zeros((num_k, 4, 4), dtype=np.complex128)
+        vx_b[:, :2, :2] = vx_b_low;   vx_b[:, 2:4, 2:4] = vx_b_high
+        vy_b[:, :2, :2] = vy_b_low;   vy_b[:, 2:4, 2:4] = vy_b_high
 
-        vx = np.zeros((num_k, 4, 4), dtype=np.complex128)
-        vy = np.zeros((num_k, 4, 4), dtype=np.complex128)
-        vx[:, :2, :2] = vx_t
-        vx[:, 2:4, 2:4] = vx_b
-        vy[:, :2, :2] = vy_t
-        vy[:, 2:4, 2:4] = vy_b
+        # Full 8x8
+        vx = np.zeros((num_k, 8, 8), dtype=np.complex128)
+        vy = np.zeros((num_k, 8, 8), dtype=np.complex128)
+        vx[:, :4, :4] = vx_t;  vx[:, 4:8, 4:8] = vx_b
+        vy[:, :4, :4] = vy_t;  vy[:, 4:8, 4:8] = vy_b
 
         return vx, vy
 
@@ -437,28 +480,52 @@ class TwistedBPModel:
         """
         w_munu = d^2H / dk_mu dk_nu for the full Hamiltonian.
         Returns w_xx, w_yy, w_xy each (Nk, dim_H, dim_H).
+        Top layer: [[w_high, 0], [0, w_low]]; Bottom layer: [[w_low, 0], [0, w_high]].
         """
         k_points = np.atleast_2d(k_points)
         num_k = len(k_points)
 
-        pf_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
-        wxx_t, wyy_t, wxy_t = self._layer_curvature(k_points, 0.0, pf_t)
+        pf_low_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
+        pf_high_t = np.cos(np.pi * (self.N_top - 1) / (self.N_top + 1))
+        wxx_t_high, wyy_t_high, wxy_t_high = self._layer_curvature(k_points, 0.0, pf_high_t)
+        wxx_t_low, wyy_t_low, wxy_t_low = self._layer_curvature(k_points, 0.0, pf_low_t)
+
+        # Top layer 4x4: [[high, 0], [0, low]]
+        def assemble_top(w_high, w_low):
+            w = np.zeros((num_k, 4, 4), dtype=np.complex128)
+            w[:, :2, :2] = w_high
+            w[:, 2:4, 2:4] = w_low
+            return w
+
+        wxx_t = assemble_top(wxx_t_high, wxx_t_low)
+        wyy_t = assemble_top(wyy_t_high, wyy_t_low)
+        wxy_t = assemble_top(wxy_t_high, wxy_t_low)
 
         if self.N_bottom == 0:
             return wxx_t, wyy_t, wxy_t
 
-        pf_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
-        wxx_b, wyy_b, wxy_b = self._layer_curvature(k_points, self.twist_angle, pf_b)
+        pf_low_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
+        pf_high_b = np.cos(np.pi * (self.N_bottom - 1) / (self.N_bottom + 1))
+        wxx_b_low, wyy_b_low, wxy_b_low = self._layer_curvature(k_points, self.twist_angle, pf_low_b)
+        wxx_b_high, wyy_b_high, wxy_b_high = self._layer_curvature(k_points, self.twist_angle, pf_high_b)
 
-        # Interlayer coupling second derivatives are also zeros since we assume a constant coupling strength
-
-        results = []
-        for w_t, w_b in [(wxx_t, wxx_b),
-                               (wyy_t, wyy_b),
-                               (wxy_t, wxy_b)]:
+        # Bottom layer 4x4: [[low, 0], [0, high]]
+        def assemble_bot(w_low, w_high):
             w = np.zeros((num_k, 4, 4), dtype=np.complex128)
-            w[:, :2, :2] = w_t
-            w[:, 2:4, 2:4] = w_b
+            w[:, :2, :2] = w_low
+            w[:, 2:4, 2:4] = w_high
+            return w
+
+        wxx_b = assemble_bot(wxx_b_low, wxx_b_high)
+        wyy_b = assemble_bot(wyy_b_low, wyy_b_high)
+        wxy_b = assemble_bot(wxy_b_low, wxy_b_high)
+
+        # Full 8x8
+        results = []
+        for w_t, w_b in [(wxx_t, wxx_b), (wyy_t, wyy_b), (wxy_t, wxy_b)]:
+            w = np.zeros((num_k, 8, 8), dtype=np.complex128)
+            w[:, :4, :4] = w_t
+            w[:, 4:8, 4:8] = w_b
             results.append(w)
 
         return results[0], results[1], results[2]
@@ -738,7 +805,7 @@ def plot_transition_matrix_elements(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"Calculating transition matrix elements map...")
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
 
-    dim_H = 4 if N_bottom > 0 else 2
+    dim_H = 8 if N_bottom > 0 else 4
     if band_indices is None:
         mid = dim_H // 2
         band_i = mid - 1  # VBM
@@ -846,11 +913,15 @@ def calculate_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     # z-position operator: top layer +d/2, bottom layer -d/2
     dim_H = Nb
     z_op = np.zeros((dim_H, dim_H), dtype=np.float64)
-    z_op[0, 0] = +layerthickness * N_top / 2.0  # top conduction
-    z_op[1, 1] = +layerthickness * N_top / 2.0  # top valence
-    if dim_H == 4:
-        z_op[2, 2] = -layerthickness * N_bottom / 2.0  # bottom conduction
-        z_op[3, 3] = -layerthickness * N_bottom / 2.0  # bottom valence
+    z_op[0, 0] = +layerthickness * N_top / 2.0  # top high sub-A
+    z_op[1, 1] = +layerthickness * N_top / 2.0  # top high sub-B
+    z_op[2, 2] = +layerthickness * N_top / 2.0  # top low sub-A
+    z_op[3, 3] = +layerthickness * N_top / 2.0  # top low sub-B
+    if dim_H == 8:
+        z_op[4, 4] = -layerthickness * N_bottom / 2.0  # bottom low sub-A
+        z_op[5, 5] = -layerthickness * N_bottom / 2.0  # bottom low sub-B
+        z_op[6, 6] = -layerthickness * N_bottom / 2.0  # bottom high sub-A
+        z_op[7, 7] = -layerthickness * N_bottom / 2.0  # bottom high sub-B
 
     # Transform: z_eig = U^dag @ z_op @ U  (Nk, Nb, Nb)
     z_eig = U_dag @ z_op @ U
@@ -1349,11 +1420,15 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     # 5. z-operator diagonal in eigenbasis
     dim_H = Nb
     z_op = np.zeros((dim_H, dim_H), dtype=np.float64)
-    z_op[0, 0] = +thickness * N_top / 2.0  # top sub-A
-    z_op[1, 1] = +thickness * N_top / 2.0  # top sub-B
-    if dim_H == 4:
-        z_op[2, 2] = -thickness * N_bottom / 2.0  # bottom sub-A
-        z_op[3, 3] = -thickness * N_bottom / 2.0  # bottom sub-B
+    z_op[0, 0] = +thickness * N_top / 2.0  # top high sub-A
+    z_op[1, 1] = +thickness * N_top / 2.0  # top high sub-B
+    z_op[2, 2] = +thickness * N_top / 2.0  # top low sub-A
+    z_op[3, 3] = +thickness * N_top / 2.0  # top low sub-B
+    if dim_H == 8:
+        z_op[4, 4] = -thickness * N_bottom / 2.0  # bottom low sub-A
+        z_op[5, 5] = -thickness * N_bottom / 2.0  # bottom low sub-B
+        z_op[6, 6] = -thickness * N_bottom / 2.0  # bottom high sub-A
+        z_op[7, 7] = -thickness * N_bottom / 2.0  # bottom high sub-B
 
     z_eig = U_dag @ z_op @ U
     z_diag = np.real(np.diagonal(z_eig, axis1=1, axis2=2))  # (Nk, Nb)
@@ -2744,7 +2819,7 @@ if __name__ == "__main__":
     kappa=5.0
     r0=6.0
     # twist_angle = 0.0
-    erange = (0.0, 0.99)
+    erange = (0.0, 2.00)
 
     # single k point test
     # --------------------------------------------
@@ -2756,8 +2831,8 @@ if __name__ == "__main__":
 
     # # Band structure
     # # # --------------------------------------------
-    # cal_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #           k_fine_steps=200, y_lim=(-0.5,1.0))
+    # cal_bands(N_top=n_top, N_bottom=0, twist_angle=twist_angle,
+    #           k_fine_steps=200, y_lim=(-2.5,2.5))
 
     # # # 3D Band Structure
     # # # --------------------------------------------
@@ -2768,13 +2843,13 @@ if __name__ == "__main__":
     # # # Optical Conductivity
     # # # --------------------------------------------
     # calculate_optical_conductivity(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                n_k=240, n_E=500,eta=0.010,
+    #                                n_k=160, n_E=500,eta=0.010,
     #                                k_range=G_moire/2, E_range=erange)
                                    
     # # # Matrix Element Map (VBM -> CBM)
     # # # --------------------------------------------
     # plot_transition_matrix_elements(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                 band_indices=(1, 2),
+    #                                 # band_indices=(0, 3),
     #                                 k_range=G_moire/2, n_k=160)
     
     # # # Bandgap scaling with N_bottom
