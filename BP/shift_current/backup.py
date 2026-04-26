@@ -12,31 +12,18 @@ class TwistedBPModel:
         Initialize TwistedBPModel with configurable parameters.
         Lattice parameters are obtained from my DFT calculations for monolayer BP.
         The TB model is based on Rudenko et al. PHYSICAL REVIEW B 92, 085419 (2015) and PHYSICAL REVIEW B 93, 199906(E) (2016).
-
-        Here, we use an 2x2 effective model to describe the low-energy physics of a naturally-stacking multilayer BP system,
-        following PHYSICAL REVIEW B 96, 155427 (2017):
-            H = H0 + H2 + cos(N * pi / (N + 1)) * H3
-        where H0, H2 are intralayer terms, and H3 is the interlayer coupling term, N is the number of layers in the stack.
-
-        For a specific multilayer BP, above Hamiltonian can be readily diagonalized:
-            H = [[E_cond, 0], [0, E_val]].
-        And the bottom layer can be twisted by an angle, which modifies the intralayer terms H0, H2 and interlayer coupling H3 accordingly.
-
-        For the coupling between the top and bottom layers, we use an effective coupling strength to capture the main physics of the interface,
-        following C Sevik et al. 2D Mater. 4 (2017) 035025.
-
-        The total hamiltonian is:
-        H = [[H_top, V_sub], [V_sub^dagger, H_bot]]
         """
         # monolayer BP parameters
-        self.b_lat=4.588 # armchair direction
         self.a_lat=3.296 # zig-zag direction
+        self.b_lat=4.588 # armchair direction
         self.N_top = N_top
         self.N_bottom = N_bottom
         self.twist_angle = twist_angle
 
         # effective interface coupling strength (in eV)
-        self.coupling = 0.095 # For 2+2/3+3, 0.095 is a good fit . For 4+4, 0.07 is a good fit.
+        self.coupling = 0.20 # For 2+2/3+3, 0.095 is a good fit . For 4+4, 0.07 is a good fit.
+        self.interface_coupling_mode = "surface_ones"
+        self.nature_coupling_scale = 0.05
 
         # tight-binding parameters
         self.a1 = 2.22
@@ -96,84 +83,118 @@ class TwistedBPModel:
 
         return tAA, tAB, tAC, tAD, tADp, tACp
 
-    def _build_2x2_block(self, num_k, a, z):
-        """Build a 2x2 Hermitian block [[a, z], [z*, a]]."""
-        blk = np.zeros((num_k, 2, 2), dtype=np.complex128)
-        blk[:, 0, 0] = a
-        blk[:, 1, 1] = a
-        blk[:, 0, 1] = z
-        blk[:, 1, 0] = np.conj(z)
-        return blk
-
     def get_hamiltonians(self, k_points):
         """
         Compute the Hamiltonian in sublattice basis.
-        Each layer is 4x4: two 2x2 sub-blocks (H_high, H_low) with different
-        interlayer prefactors cos(pi*(N-1)/(N+1)) and cos(pi*N/(N+1)).
-        Top layer ordering:    [[H_high, 0], [0, H_low]]
-        Bottom layer ordering: [[H_low, 0], [0, H_high]]
-        This places top_low and bot_low adjacent for easy coupling insertion.
-        Interlayer coupling V_sub connects only the H_low blocks.
         """
         k_points = np.atleast_2d(k_points)
         num_k = len(k_points)
 
-        # Top layer (untwisted) — 4x4: [[H_high, 0], [0, H_low]]
-        pf_low_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
-        pf_high_t = np.cos(np.pi * (self.N_top - 1) / (self.N_top + 1))
+        # Top layer (untwisted)
         tAA, tAB, tAC, tAD, tADp, tACp = self.basic_block(k_points, twist_angle=0.0)
+        # Ham matrix for a single layer (2x2) in top layer
+        Hs_top = np.zeros((num_k, 2, 2), dtype=np.complex128)
+        Hs_top[:, 0, 0] = tAA + tAD
+        Hs_top[:, 1, 1] = tAA + tAD
+        Hs_top[:, 0, 1] = tAB + tAC
+        Hs_top[:, 1, 0] = np.conj(tAB + tAC)
+        # Interlayer coupling (2x2) between layers in the top block
+        Hc_top = np.zeros((num_k, 2, 2), dtype=np.complex128)
+        Hc_top[:, 0, 0] = tADp / 2
+        Hc_top[:, 1, 1] = tADp / 2
+        Hc_top[:, 0, 1] = tACp / 2
+        Hc_top[:, 1, 0] = np.conj(tACp / 2)
 
-        a_t_high = tAA + tAD + pf_high_t * tADp
-        z_t_high = tAB + tAC + pf_high_t * tACp
-        a_t_low = tAA + tAD + pf_low_t * tADp
-        z_t_low = tAB + tAC + pf_low_t * tACp
+        # Bottom layer (twisted)
+        tAA, tAB, tAC, tAD, tADp, tACp = self.basic_block(k_points, twist_angle=self.twist_angle)
+        # Ham matrix for a single layer (2x2) in bottom layer
+        Hs_bot = np.zeros((num_k, 2, 2), dtype=np.complex128)
+        Hs_bot[:, 0, 0] = tAA + tAD
+        Hs_bot[:, 1, 1] = tAA + tAD
+        Hs_bot[:, 0, 1] = tAB + tAC
+        Hs_bot[:, 1, 0] = np.conj(tAB + tAC)
+        # Interlayer coupling (2x2) between layers in the bottom block
+        Hc_bot = np.zeros((num_k, 2, 2), dtype=np.complex128)
+        Hc_bot[:, 0, 0] = tADp / 2
+        Hc_bot[:, 1, 1] = tADp / 2
+        Hc_bot[:, 0, 1] = tACp / 2
+        Hc_bot[:, 1, 0] = np.conj(tACp / 2)
 
-        ham_top = np.zeros((num_k, 4, 4), dtype=np.complex128)
-        ham_top[:, :2, :2] = self._build_2x2_block(num_k, a_t_high, z_t_high)
-        ham_top[:, 2:4, 2:4] = self._build_2x2_block(num_k, a_t_low, z_t_low)
+        # Construct the top block Hamiltonian for the twisted system
+        H_top = np.zeros((num_k, self.N_top * 2, self.N_top * 2), dtype=np.complex128)
+        for i in range(self.N_top):
+            H_top[:,i*2:(i+1)*2, i*2:(i+1)*2] = Hs_top
+            if i > 0:
+                H_top[:,(i-1)*2:i*2, i*2:(i+1)*2] = Hc_top
+                H_top[:,i*2:(i+1)*2, (i-1)*2:i*2] = np.conj(Hc_top).transpose((0,2,1))
 
         if self.N_bottom == 0:
-            return ham_top
+            return H_top
+        
+        # Construct the bottom block Hamiltonian for the twisted system
+        H_bot = np.zeros((num_k, self.N_bottom * 2, self.N_bottom * 2), dtype=np.complex128)
+        for i in range(self.N_bottom):
+            H_bot[:,i*2:(i+1)*2, i*2:(i+1)*2] = Hs_bot
+            if i > 0:
+                H_bot[:,(i-1)*2:i*2, i*2:(i+1)*2] = Hc_bot
+                H_bot[:,i*2:(i+1)*2, (i-1)*2:i*2] = np.conj(Hc_bot).transpose((0,2,1))
+        
+        # Construct the full Hamiltonian for the twisted system
+        H_full = np.zeros((num_k, (self.N_top + self.N_bottom) * 2, (self.N_top + self.N_bottom) * 2), dtype=np.complex128)
+        H_full[:, :self.N_top*2, :self.N_top*2] = H_top
+        H_full[:, self.N_top*2:, self.N_top*2:] = H_bot
 
-        # Bottom layer (twisted) — 4x4: [[H_low, 0], [0, H_high]]
-        pf_low_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
-        pf_high_b = np.cos(np.pi * (self.N_bottom - 1) / (self.N_bottom + 1))
-        tAA, tAB, tAC, tAD, tADp, tACp = self.basic_block(k_points, twist_angle=self.twist_angle)
+        H_int = self._interface_coupling_matrix(num_k, Hc_top=Hc_top, Hc_bot=Hc_bot)
+        self._insert_interface_block(H_full, H_int)
 
-        a_b_low = tAA + tAD + pf_low_b * tADp
-        z_b_low = tAB + tAC + pf_low_b * tACp
-        a_b_high = tAA + tAD + pf_high_b * tADp
-        z_b_high = tAB + tAC + pf_high_b * tACp
+        return H_full
 
-        ham_bot = np.zeros((num_k, 4, 4), dtype=np.complex128)
-        ham_bot[:, :2, :2] = self._build_2x2_block(num_k, a_b_low, z_b_low)
-        ham_bot[:, 2:4, 2:4] = self._build_2x2_block(num_k, a_b_high, z_b_high)
+    def _interface_slices(self):
+        """Return slices for the two physical layers adjacent to the twisted interface."""
+        top = slice((self.N_top - 1) * 2, self.N_top * 2)
+        bottom = slice(self.N_top * 2, (self.N_top + 1) * 2)
+        return top, bottom
 
-        # Full 8x8: top [0:4], bottom [4:8]
-        ham = np.zeros((num_k, 8, 8), dtype=np.complex128)
-        ham[:, :4, :4] = ham_top
-        ham[:, 4:8, 4:8] = ham_bot
+    def _insert_interface_block(self, matrix, H_int):
+        """Insert the top-bottom interface block and its Hermitian conjugate."""
+        top, bottom = self._interface_slices()
+        matrix[:, top, bottom] = H_int
+        matrix[:, bottom, top] = H_int.conj().transpose((0, 2, 1))
 
-        # Interlayer coupling: V_sub connects all top subbands to all bottom subbands
-        # in the sublattice basis (independent of subband index)
-        ham_inter = np.zeros((num_k, 2, 2), dtype=np.complex128)
-        ham_inter[:, 0, 0] = self.coupling
-        ham_inter[:, 0, 1] = self.coupling
-        ham_inter[:, 1, 0] = self.coupling
-        ham_inter[:, 1, 1] = self.coupling
+    def _interface_coupling_matrix(self, num_k, Hc_top=None, Hc_bot=None):
+        """
+        Build the interface coupling between the bottom surface of the top block
+        and the top surface of the bottom block.
 
-        # top_high [0:2] <-> bot_low [4:6], bot_high [6:8]
-        ham[:, 0:2, 4:6] = ham_inter * 0.5
-        ham[:, 4:6, 0:2] = ham_inter.conj().transpose((0, 2, 1)) * 0.5
-        # ham[:, 0:2, 6:8] = ham_inter
-        # ham[:, 6:8, 0:2] = ham_inter.conj().transpose((0, 2, 1))
-        # top_low [2:4] <-> bot_low [4:6], bot_high [6:8]
-        ham[:, 2:4, 4:6] = ham_inter
-        ham[:, 4:6, 2:4] = ham_inter.conj().transpose((0, 2, 1))
-        ham[:, 2:4, 6:8] = ham_inter * 0.5
-        ham[:, 6:8, 2:4] = ham_inter.conj().transpose((0, 2, 1)) * 0.5
+        Modes
+        -----
+        surface_ones
+            self.coupling * [[1, 1], [1, 1]]. This preserves the current model.
+        surface_identity
+            self.coupling * I_2.
+        nature_average
+            self.nature_coupling_scale * (Hc_top + Hc_bot). This matches the
+            commented Nature Electronics-inspired treatment, but can split
+            Gamma-point degeneracies.
+        none
+            No top-bottom interface coupling.
+        """
+        H_int = np.zeros((num_k, 2, 2), dtype=np.complex128)
 
-        return ham
+        if self.interface_coupling_mode == "surface_ones":
+            H_int[:, :, :] = self.coupling
+        elif self.interface_coupling_mode == "surface_identity":
+            H_int[:, :, :] = self.coupling * np.eye(2, dtype=np.complex128)
+        elif self.interface_coupling_mode == "nature_average":
+            if Hc_top is None or Hc_bot is None:
+                raise ValueError("nature_average mode requires Hc_top and Hc_bot.")
+            H_int = self.nature_coupling_scale * (Hc_top + Hc_bot)
+        elif self.interface_coupling_mode == "none":
+            pass
+        else:
+            raise ValueError(f"Unknown interface_coupling_mode: {self.interface_coupling_mode}")
+
+        return H_int
 
     def basic_block_velocity(self, k_points, twist_angle):
         """
@@ -355,101 +376,102 @@ class TwistedBPModel:
                 gtADp_xx, gtADp_yy, gtADp_xy,
                 gtACp_xx, gtACp_yy, gtACp_xy)
 
-    def _layer_velocity(self, k_points, twist_angle, prefactor):
-        """
-        Compute d/dk_mu of the 2x2 block for one layer (sublattice basis).
+    def _single_layer_matrices_from_terms(self, terms):
+        """Build intralayer and adjacent-layer coupling matrices from TB terms."""
+        tAA, tAB, tAC, tAD, tADp, tACp = terms
+        num_k = len(np.atleast_1d(tAA))
 
-        H_layer = [[a, z], [z*, a]]
+        Hs = np.zeros((num_k, 2, 2), dtype=np.complex128)
+        Hs[:, 0, 0] = tAA + tAD
+        Hs[:, 1, 1] = tAA + tAD
+        Hs[:, 0, 1] = tAB + tAC
+        Hs[:, 1, 0] = np.conj(tAB + tAC)
 
-        d/dk_mu H = [[da/dk_mu,  dz/dk_mu],
-                     [dz*/dk_mu, da/dk_mu]]
+        Hc = np.zeros((num_k, 2, 2), dtype=np.complex128)
+        Hc[:, 0, 0] = tADp / 2
+        Hc[:, 1, 1] = tADp / 2
+        Hc[:, 0, 1] = tACp / 2
+        Hc[:, 1, 0] = np.conj(tACp / 2)
+        return Hs, Hc
 
-        Returns vx, vy each (Nk, 2, 2).
-        """
-        k_points = np.atleast_2d(k_points)
-        num_k = len(k_points)
+    def _stack_block_from_layer_matrices(self, Hs, Hc, n_layers):
+        """Assemble a layer-resolved block with nearest-neighbor interlayer coupling."""
+        num_k = Hs.shape[0]
+        block = np.zeros((num_k, n_layers * 2, n_layers * 2), dtype=np.complex128)
+        for i in range(n_layers):
+            block[:, i*2:(i+1)*2, i*2:(i+1)*2] = Hs
+            if i > 0:
+                block[:, (i-1)*2:i*2, i*2:(i+1)*2] = Hc
+                block[:, i*2:(i+1)*2, (i-1)*2:i*2] = Hc.conj().transpose((0, 2, 1))
+        return block
 
-        # First derivatives of each hopping element
+    def _stack_velocity(self, k_points, twist_angle, n_layers):
+        """Velocity matrices for an n-layer block in the new multiband basis."""
         (dAA_x, dAA_y, dAB_x, dAB_y, dAC_x, dAC_y,
          dAD_x, dAD_y, dADp_x, dADp_y, dACp_x, dACp_y) = \
             self.basic_block_velocity(k_points, twist_angle)
 
-        da_x = dAA_x + dAD_x + prefactor * dADp_x
-        da_y = dAA_y + dAD_y + prefactor * dADp_y
-        dz_x = dAB_x + dAC_x + prefactor * dACp_x
-        dz_y = dAB_y + dAC_y + prefactor * dACp_y
+        Hs_x, Hc_x = self._single_layer_matrices_from_terms(
+            (dAA_x, dAB_x, dAC_x, dAD_x, dADp_x, dACp_x))
+        Hs_y, Hc_y = self._single_layer_matrices_from_terms(
+            (dAA_y, dAB_y, dAC_y, dAD_y, dADp_y, dACp_y))
 
-        vx = np.zeros((num_k, 2, 2), dtype=np.complex128)
-        vy = np.zeros((num_k, 2, 2), dtype=np.complex128)
+        return (self._stack_block_from_layer_matrices(Hs_x, Hc_x, n_layers),
+                self._stack_block_from_layer_matrices(Hs_y, Hc_y, n_layers))
 
-        vx[:, 0, 0] = da_x
-        vx[:, 1, 1] = da_x
-        vx[:, 0, 1] = dz_x
-        vx[:, 1, 0] = np.conj(dz_x)
+    def _interface_velocity_matrices(self, k_points):
+        """Velocity contribution from a k-dependent interface coupling."""
+        k_points = np.atleast_2d(k_points)
+        num_k = len(k_points)
+        zeros = np.zeros((num_k, 2, 2), dtype=np.complex128)
 
-        vy[:, 0, 0] = da_y
-        vy[:, 1, 1] = da_y
-        vy[:, 0, 1] = dz_y
-        vy[:, 1, 0] = np.conj(dz_y)
+        if self.interface_coupling_mode != "nature_average":
+            return zeros.copy(), zeros.copy()
 
-        return vx, vy
+        top = self.basic_block_velocity(k_points, 0.0)
+        bot = self.basic_block_velocity(k_points, self.twist_angle)
+
+        _, Hc_top_x = self._single_layer_matrices_from_terms(
+            (top[0], top[2], top[4], top[6], top[8], top[10]))
+        _, Hc_top_y = self._single_layer_matrices_from_terms(
+            (top[1], top[3], top[5], top[7], top[9], top[11]))
+        _, Hc_bot_x = self._single_layer_matrices_from_terms(
+            (bot[0], bot[2], bot[4], bot[6], bot[8], bot[10]))
+        _, Hc_bot_y = self._single_layer_matrices_from_terms(
+            (bot[1], bot[3], bot[5], bot[7], bot[9], bot[11]))
+
+        return (self.nature_coupling_scale * (Hc_top_x + Hc_bot_x),
+                self.nature_coupling_scale * (Hc_top_y + Hc_bot_y))
 
     def get_velocity_matrices(self, k_points):
         """
-        Calculate velocity matrices vx, vy for the full Hamiltonian.
-        v = dH/dk (units: eV * Angstrom)
+        Calculate velocity matrices vx, vy for the full multiband Hamiltonian.
+        v = dH/dk (units: eV * Angstrom).
         Returns vx, vy each (Nk, dim_H, dim_H).
-        Top layer: [[v_high, 0], [0, v_low]]; Bottom layer: [[v_low, 0], [0, v_high]].
         """
         k_points = np.atleast_2d(k_points)
         num_k = len(k_points)
 
-        pf_low_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
-        pf_high_t = np.cos(np.pi * (self.N_top - 1) / (self.N_top + 1))
-        vx_t_high, vy_t_high = self._layer_velocity(k_points, 0.0, pf_high_t)
-        vx_t_low, vy_t_low = self._layer_velocity(k_points, 0.0, pf_low_t)
-
-        # Top layer 4x4: [[high, 0], [0, low]]
-        vx_t = np.zeros((num_k, 4, 4), dtype=np.complex128)
-        vy_t = np.zeros((num_k, 4, 4), dtype=np.complex128)
-        vx_t[:, :2, :2] = vx_t_high;  vx_t[:, 2:4, 2:4] = vx_t_low
-        vy_t[:, :2, :2] = vy_t_high;  vy_t[:, 2:4, 2:4] = vy_t_low
-
+        vx_t, vy_t = self._stack_velocity(k_points, 0.0, self.N_top)
         if self.N_bottom == 0:
             return vx_t, vy_t
 
-        pf_low_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
-        pf_high_b = np.cos(np.pi * (self.N_bottom - 1) / (self.N_bottom + 1))
-        vx_b_low, vy_b_low = self._layer_velocity(k_points, self.twist_angle, pf_low_b)
-        vx_b_high, vy_b_high = self._layer_velocity(k_points, self.twist_angle, pf_high_b)
-
-        # Bottom layer 4x4: [[low, 0], [0, high]]
-        vx_b = np.zeros((num_k, 4, 4), dtype=np.complex128)
-        vy_b = np.zeros((num_k, 4, 4), dtype=np.complex128)
-        vx_b[:, :2, :2] = vx_b_low;   vx_b[:, 2:4, 2:4] = vx_b_high
-        vy_b[:, :2, :2] = vy_b_low;   vy_b[:, 2:4, 2:4] = vy_b_high
-
-        # Full 8x8
-        vx = np.zeros((num_k, 8, 8), dtype=np.complex128)
-        vy = np.zeros((num_k, 8, 8), dtype=np.complex128)
-        vx[:, :4, :4] = vx_t;  vx[:, 4:8, 4:8] = vx_b
-        vy[:, :4, :4] = vy_t;  vy[:, 4:8, 4:8] = vy_b
-
+        vx_b, vy_b = self._stack_velocity(k_points, self.twist_angle, self.N_bottom)
+        dim = 2 * (self.N_top + self.N_bottom)
+        vx = np.zeros((num_k, dim, dim), dtype=np.complex128)
+        vy = np.zeros((num_k, dim, dim), dtype=np.complex128)
+        split = 2 * self.N_top
+        vx[:, :split, :split] = vx_t
+        vx[:, split:, split:] = vx_b
+        vy[:, :split, :split] = vy_t
+        vy[:, split:, split:] = vy_b
+        H_int_x, H_int_y = self._interface_velocity_matrices(k_points)
+        self._insert_interface_block(vx, H_int_x)
+        self._insert_interface_block(vy, H_int_y)
         return vx, vy
 
-    def _layer_curvature(self, k_points, twist_angle, prefactor):
-        """
-        Compute d^2/dk_mu dk_nu of the 2x2 block for one layer (sublattice basis).
-
-        d^2H/dk_mu dk_nu = [[d^2a,  d^2z ],
-                            [d^2z*, d^2a ]]
-
-        Returns w_xx, w_yy, w_xy each (Nk, 2, 2).
-        """
-        k_points = np.atleast_2d(k_points)
-        num_k = len(k_points)
-
-        # Second derivatives of each hopping element
+    def _stack_curvature(self, k_points, twist_angle, n_layers):
+        """Second derivative matrices for an n-layer block in the new multiband basis."""
         (d2AA_xx, d2AA_yy, d2AA_xy,
          d2AB_xx, d2AB_yy, d2AB_xy,
          d2AC_xx, d2AC_yy, d2AC_xy,
@@ -458,77 +480,87 @@ class TwistedBPModel:
          d2ACp_xx, d2ACp_yy, d2ACp_xy) = \
             self.basic_block_curvature(k_points, twist_angle)
 
-        results = []
-        for (d2AA, d2AD, d2ADp, d2AB, d2AC, d2ACp) in [
-            (d2AA_xx, d2AD_xx, d2ADp_xx, d2AB_xx, d2AC_xx, d2ACp_xx),  # xx
-            (d2AA_yy, d2AD_yy, d2ADp_yy, d2AB_yy, d2AC_yy, d2ACp_yy),  # yy
-            (d2AA_xy, d2AD_xy, d2ADp_xy, d2AB_xy, d2AC_xy, d2ACp_xy),  # xy
+        blocks = []
+        for terms in [
+            (d2AA_xx, d2AB_xx, d2AC_xx, d2AD_xx, d2ADp_xx, d2ACp_xx),
+            (d2AA_yy, d2AB_yy, d2AC_yy, d2AD_yy, d2ADp_yy, d2ACp_yy),
+            (d2AA_xy, d2AB_xy, d2AC_xy, d2AD_xy, d2ADp_xy, d2ACp_xy),
         ]:
-            d2a = d2AA + d2AD + prefactor * d2ADp
-            d2z = d2AB + d2AC + prefactor * d2ACp
+            Hs, Hc = self._single_layer_matrices_from_terms(terms)
+            blocks.append(self._stack_block_from_layer_matrices(Hs, Hc, n_layers))
+        return blocks[0], blocks[1], blocks[2]
 
-            w = np.zeros((num_k, 2, 2), dtype=np.complex128)
-            w[:, 0, 0] = d2a
-            w[:, 1, 1] = d2a
-            w[:, 0, 1] = d2z
-            w[:, 1, 0] = np.conj(d2z)
-            results.append(w)
+    def _interface_curvature_matrices(self, k_points):
+        """Curvature contribution from a k-dependent interface coupling."""
+        k_points = np.atleast_2d(k_points)
+        num_k = len(k_points)
+        zeros = np.zeros((num_k, 2, 2), dtype=np.complex128)
 
-        return results[0], results[1], results[2]
+        if self.interface_coupling_mode != "nature_average":
+            return zeros.copy(), zeros.copy(), zeros.copy()
+
+        top = self.basic_block_curvature(k_points, 0.0)
+        bot = self.basic_block_curvature(k_points, self.twist_angle)
+
+        _, Hc_top_xx = self._single_layer_matrices_from_terms(
+            (top[0], top[3], top[6], top[9], top[12], top[15]))
+        _, Hc_top_yy = self._single_layer_matrices_from_terms(
+            (top[1], top[4], top[7], top[10], top[13], top[16]))
+        _, Hc_top_xy = self._single_layer_matrices_from_terms(
+            (top[2], top[5], top[8], top[11], top[14], top[17]))
+        _, Hc_bot_xx = self._single_layer_matrices_from_terms(
+            (bot[0], bot[3], bot[6], bot[9], bot[12], bot[15]))
+        _, Hc_bot_yy = self._single_layer_matrices_from_terms(
+            (bot[1], bot[4], bot[7], bot[10], bot[13], bot[16]))
+        _, Hc_bot_xy = self._single_layer_matrices_from_terms(
+            (bot[2], bot[5], bot[8], bot[11], bot[14], bot[17]))
+
+        return (self.nature_coupling_scale * (Hc_top_xx + Hc_bot_xx),
+                self.nature_coupling_scale * (Hc_top_yy + Hc_bot_yy),
+                self.nature_coupling_scale * (Hc_top_xy + Hc_bot_xy))
 
     def get_generalized_derivative_matrices(self, k_points):
         """
-        w_munu = d^2H / dk_mu dk_nu for the full Hamiltonian.
+        w_munu = d^2H / dk_mu dk_nu for the full multiband Hamiltonian.
         Returns w_xx, w_yy, w_xy each (Nk, dim_H, dim_H).
-        Top layer: [[w_high, 0], [0, w_low]]; Bottom layer: [[w_low, 0], [0, w_high]].
         """
         k_points = np.atleast_2d(k_points)
         num_k = len(k_points)
 
-        pf_low_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
-        pf_high_t = np.cos(np.pi * (self.N_top - 1) / (self.N_top + 1))
-        wxx_t_high, wyy_t_high, wxy_t_high = self._layer_curvature(k_points, 0.0, pf_high_t)
-        wxx_t_low, wyy_t_low, wxy_t_low = self._layer_curvature(k_points, 0.0, pf_low_t)
-
-        # Top layer 4x4: [[high, 0], [0, low]]
-        def assemble_top(w_high, w_low):
-            w = np.zeros((num_k, 4, 4), dtype=np.complex128)
-            w[:, :2, :2] = w_high
-            w[:, 2:4, 2:4] = w_low
-            return w
-
-        wxx_t = assemble_top(wxx_t_high, wxx_t_low)
-        wyy_t = assemble_top(wyy_t_high, wyy_t_low)
-        wxy_t = assemble_top(wxy_t_high, wxy_t_low)
-
+        wxx_t, wyy_t, wxy_t = self._stack_curvature(k_points, 0.0, self.N_top)
         if self.N_bottom == 0:
             return wxx_t, wyy_t, wxy_t
 
-        pf_low_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
-        pf_high_b = np.cos(np.pi * (self.N_bottom - 1) / (self.N_bottom + 1))
-        wxx_b_low, wyy_b_low, wxy_b_low = self._layer_curvature(k_points, self.twist_angle, pf_low_b)
-        wxx_b_high, wyy_b_high, wxy_b_high = self._layer_curvature(k_points, self.twist_angle, pf_high_b)
-
-        # Bottom layer 4x4: [[low, 0], [0, high]]
-        def assemble_bot(w_low, w_high):
-            w = np.zeros((num_k, 4, 4), dtype=np.complex128)
-            w[:, :2, :2] = w_low
-            w[:, 2:4, 2:4] = w_high
-            return w
-
-        wxx_b = assemble_bot(wxx_b_low, wxx_b_high)
-        wyy_b = assemble_bot(wyy_b_low, wyy_b_high)
-        wxy_b = assemble_bot(wxy_b_low, wxy_b_high)
-
-        # Full 8x8
+        wxx_b, wyy_b, wxy_b = self._stack_curvature(k_points, self.twist_angle, self.N_bottom)
+        dim = 2 * (self.N_top + self.N_bottom)
+        split = 2 * self.N_top
         results = []
-        for w_t, w_b in [(wxx_t, wxx_b), (wyy_t, wyy_b), (wxy_t, wxy_b)]:
-            w = np.zeros((num_k, 8, 8), dtype=np.complex128)
-            w[:, :4, :4] = w_t
-            w[:, 4:8, 4:8] = w_b
+        for top, bot in [(wxx_t, wxx_b), (wyy_t, wyy_b), (wxy_t, wxy_b)]:
+            w = np.zeros((num_k, dim, dim), dtype=np.complex128)
+            w[:, :split, :split] = top
+            w[:, split:, split:] = bot
             results.append(w)
-
+        H_int_xx, H_int_yy, H_int_xy = self._interface_curvature_matrices(k_points)
+        for w, H_int in zip(results, [H_int_xx, H_int_yy, H_int_xy]):
+            self._insert_interface_block(w, H_int)
         return results[0], results[1], results[2]
+
+    def get_orbital_z_positions(self, thickness=5.2):
+        """
+        Return one effective z coordinate per orbital in the layer-resolved basis.
+
+        Basis order is [top layer 0 A/B, ..., top layer N A/B,
+        bottom layer 0 A/B, ..., bottom layer N A/B].
+
+        The layer-resolved Hamiltonian is still a multiband model, but for
+        out-of-plane optical observables each top/bottom block is treated as
+        an averaged-height effective block. Therefore all orbitals in the top
+        block share +thickness/2 and all orbitals in the bottom block share
+        -thickness/2, independent of N_top and N_bottom.
+        """
+        z_orb = np.full(2 * (self.N_top + self.N_bottom), -thickness / 2.0)
+        z_orb[:2 * self.N_top] = thickness / 2.0
+        return z_orb
 
 # ============================================================
 # Standalone analysis functions
@@ -612,7 +644,6 @@ def cal_bands(N_top=4, N_bottom=4, twist_angle=0.0,
                   folded_is_structured=True)
     return model
 
-
 def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
                   sym_pos, sym_labels, k_boundary, y_lim, suffix="",
                   folded_is_structured=False):
@@ -664,7 +695,6 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
 
     print(f"Figures saved with suffix {suffix}")
 
-
 def plot_3d_bands(N_top=1, N_bottom=1, twist_angle=0.0,
                   k_range=0.2, n_grid=40, bands_to_plot=4,
                   view_elev=30, view_azim=45, save_prefix=""):
@@ -705,10 +735,11 @@ def plot_3d_bands(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.close()
     print(f"Saved 3D plot: {fname}")
 
-
 def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
                                    E_range=(0.0, 1.0), n_E=500, eta=0.010,
-                                   k_range=0.15, n_k=60, save_prefix=""):
+                                   k_range=0.15, n_k=60, band_pairs=None,
+                                   plot_band_contributions=True,
+                                   save_prefix=""):
     r"""
     Calculate optical absorption spectrum via Kubo-Greenwood formula.
 
@@ -718,6 +749,14 @@ def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
         \cdot \delta(E_{c,k} - E_{v,k} - \hbar \omega)
 
     Absorbance is proportional to \epsilon_2 * \omega, so we plot that as the final spectrum.
+
+    Parameters
+    ----------
+    band_pairs : list[tuple[int, int]] or None
+        Absolute band-index pairs (valence_band, conduction_band) to resolve
+        separately. If None, all occupied-to-empty pairs are resolved.
+    plot_band_contributions : bool
+        If True, save an additional plot with the band-to-band contributions.
     """
     print(f"Calculating optical conductivity spectrum...")
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
@@ -780,6 +819,40 @@ def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
     absorption_xx = sigma_xx * omegas
     absorption_yy = sigma_yy * omegas
 
+    # Band-to-band resolved contributions. Pair ordering follows the flattening
+    # of arrays with shape (Nk, Nv, Nc): pair_id = v_local * Nc + c_local.
+    all_pairs = [(v, c) for v in range(mid_idx) for c in range(mid_idx, n_bands)]
+    if band_pairs is None:
+        selected_pairs = all_pairs
+    else:
+        selected_pairs = [(int(v), int(c)) for v, c in band_pairs]
+        invalid = [
+            (v, c) for v, c in selected_pairs
+            if v < 0 or v >= mid_idx or c < mid_idx or c >= n_bands
+        ]
+        if invalid:
+            raise ValueError(
+                "band_pairs must be absolute (valence_band, conduction_band) "
+                f"indices with valence in [0, {mid_idx - 1}] and conduction "
+                f"in [{mid_idx}, {n_bands - 1}]. Invalid: {invalid}"
+            )
+
+    band_contributions = {}
+    if selected_pairs:
+        print(f"  Resolving {len(selected_pairs)} band-to-band contributions...")
+        for v_band, c_band in selected_pairs:
+            pair_id = v_band * (n_bands - mid_idx) + (c_band - mid_idx)
+            dE_pair = dE_flat[:, pair_id]
+            diff = omegas[:, None] - dE_pair[None, :]
+            lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+
+            sigma_pair_x = np.sum(lorentz * M_flat_x[:, pair_id][None, :], axis=1) / Nk
+            sigma_pair_y = np.sum(lorentz * M_flat_y[:, pair_id][None, :], axis=1) / Nk
+            band_contributions[(v_band, c_band)] = {
+                'x': sigma_pair_x * omegas,
+                'y': sigma_pair_y * omegas,
+            }
+
     plt.figure(figsize=(8, 6))
     plt.plot(omegas, absorption_xx, 'r-', label=r'x-polarized', lw=2)
     plt.plot(omegas, absorption_yy, 'b--', label=r'y-polarized', lw=2)
@@ -795,6 +868,32 @@ def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.close()
     print(f"Saved Optical Absorption Spectrum: {fname}")
 
+    if plot_band_contributions and band_contributions:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharex=True)
+        axes[0].plot(omegas, absorption_xx, 'k-', lw=2.5, label='total x')
+        axes[1].plot(omegas, absorption_yy, 'k-', lw=2.5, label='total y')
+
+        for (v_band, c_band), contrib in band_contributions.items():
+            label = f'{v_band}→{c_band}'
+            axes[0].plot(omegas, contrib['x'], lw=1.4, alpha=0.85, label=label)
+            axes[1].plot(omegas, contrib['y'], lw=1.4, alpha=0.85, label=label)
+
+        axes[0].set_title('x-polarized band contributions')
+        axes[1].set_title('y-polarized band contributions')
+        for ax in axes:
+            ax.set_xlabel('Photon Energy (eV)')
+            ax.set_ylabel('Optical Absorption (a.u.)')
+            ax.grid(True, alpha=0.3)
+            ax.set_xlim(E_range)
+            ax.legend(fontsize=8, ncol=2)
+        fig.suptitle(rf'Band-to-band optical absorption, $\eta$={eta*1000:.1f} meV')
+        plt.tight_layout()
+        fname = f"EM_absorption_band_contributions{save_prefix}.png"
+        plt.savefig(fname, dpi=300)
+        plt.close()
+        print(f"Saved Band Contribution Spectrum: {fname}")
+
+    return omegas, {'x': absorption_xx, 'y': absorption_yy}, band_contributions
 
 def plot_transition_matrix_elements(N_top=1, N_bottom=1, twist_angle=0.0,
                                     band_indices=None,
@@ -805,7 +904,7 @@ def plot_transition_matrix_elements(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"Calculating transition matrix elements map...")
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
 
-    dim_H = 8 if N_bottom > 0 else 4
+    dim_H = 2 * (N_top + N_bottom)
     if band_indices is None:
         mid = dim_H // 2
         band_i = mid - 1  # VBM
@@ -856,7 +955,6 @@ def plot_transition_matrix_elements(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"Saved Matrix Element Map: {fname}")
-
 
 def calculate_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                                E_range=(0.0, 1.0), n_E=400, eta=0.010,
@@ -910,18 +1008,9 @@ def calculate_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     vx_eig = U_dag @ vx_orb @ U
     vy_eig = U_dag @ vy_orb @ U
 
-    # z-position operator: top layer +d/2, bottom layer -d/2
+    # z-position operator in the layer-resolved orbital basis.
     dim_H = Nb
-    z_op = np.zeros((dim_H, dim_H), dtype=np.float64)
-    z_op[0, 0] = +layerthickness * N_top / 2.0  # top high sub-A
-    z_op[1, 1] = +layerthickness * N_top / 2.0  # top high sub-B
-    z_op[2, 2] = +layerthickness * N_top / 2.0  # top low sub-A
-    z_op[3, 3] = +layerthickness * N_top / 2.0  # top low sub-B
-    if dim_H == 8:
-        z_op[4, 4] = -layerthickness * N_bottom / 2.0  # bottom low sub-A
-        z_op[5, 5] = -layerthickness * N_bottom / 2.0  # bottom low sub-B
-        z_op[6, 6] = -layerthickness * N_bottom / 2.0  # bottom high sub-A
-        z_op[7, 7] = -layerthickness * N_bottom / 2.0  # bottom high sub-B
+    z_op = np.diag(model.get_orbital_z_positions(layerthickness))
 
     # Transform: z_eig = U^dag @ z_op @ U  (Nk, Nb, Nb)
     z_eig = U_dag @ z_op @ U
@@ -1021,7 +1110,6 @@ def calculate_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.close()
     print(f"Saved Z-Shift Current Figure: {fname}")
     return omegas, results
-
 
 def calculate_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                             E_range=(0.0, 1.0), n_E=400, eta=0.010,
@@ -1186,7 +1274,6 @@ def calculate_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"Saved Shift Current Figure: {fname}")
     return omegas, results
 
-
 def plot_bandgap_scaling(N_top=1, N_bottom=1, twist_angle=0.0,
                          E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,):
     """
@@ -1251,7 +1338,6 @@ def keldysh_potential(q, kappa=2.5, r0=5.0, N_top=1, N_bottom=1):
     mask = q > 1e-12
     V[mask] = 14.3996 * 2 * np.pi / (kappa *(q[mask] * (1 + r0 * (N_top + N_bottom) * q[mask])))
     return V
-
 
 def build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc, kappa=2.5, r0=5.0, N_top=1, N_bottom=1):
     """
@@ -1331,7 +1417,6 @@ def build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc, kappa=2.5,
         H_bse = 0.5 * (H_bse + H_bse.conj().T)
 
     return H_bse
-
 
 def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                                    E_range=(0.0, 1.0), n_E=400, eta=0.010,
@@ -1419,16 +1504,7 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
 
     # 5. z-operator diagonal in eigenbasis
     dim_H = Nb
-    z_op = np.zeros((dim_H, dim_H), dtype=np.float64)
-    z_op[0, 0] = +thickness * N_top / 2.0  # top high sub-A
-    z_op[1, 1] = +thickness * N_top / 2.0  # top high sub-B
-    z_op[2, 2] = +thickness * N_top / 2.0  # top low sub-A
-    z_op[3, 3] = +thickness * N_top / 2.0  # top low sub-B
-    if dim_H == 8:
-        z_op[4, 4] = -thickness * N_bottom / 2.0  # bottom low sub-A
-        z_op[5, 5] = -thickness * N_bottom / 2.0  # bottom low sub-B
-        z_op[6, 6] = -thickness * N_bottom / 2.0  # bottom high sub-A
-        z_op[7, 7] = -thickness * N_bottom / 2.0  # bottom high sub-B
+    z_op = np.diag(model.get_orbital_z_positions(thickness))
 
     z_eig = U_dag @ z_op @ U
     z_diag = np.real(np.diagonal(z_eig, axis1=1, axis2=2))  # (Nk, Nb)
@@ -1617,7 +1693,6 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                           save_prefix=save_prefix)
 
     return omegas, results, Omega_S, A_coeff
-
 
 def calculate_bse_absorbance(N_top=1, N_bottom=1, twist_angle=0.0,
                               E_range=(0.0, 1.0), n_E=500, eta=0.010,
@@ -1810,7 +1885,6 @@ def calculate_bse_absorbance(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"\nSaved BSE Absorbance Figure: {fname}")
 
     return omegas, abs_bse, Omega_S, A_coeff
-
 
 def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
                                       E_range=(0.0, 1.0), eta=0.010,
@@ -2034,7 +2108,6 @@ def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
 
     return Omega_S, osc
 
-
 def plot_exciton_analysis(Omega_S, osc_data, shift_weight_data, E_range=(0.0, 1.0),
                           N_top=1, N_bottom=1, twist_angle=0.0,
                           kappa=2.5, r0=5.0, thickness=5.2,
@@ -2099,7 +2172,6 @@ def plot_exciton_analysis(Omega_S, osc_data, shift_weight_data, E_range=(0.0, 1.
     plt.close()
     print(f"Saved Exciton Analysis Figure: {fname}")
 
-
 def _resolve_degenerate_excitons(Omega_S, A_coeff, r_b_x_flat, r_b_y_flat,
                                   degen_tol=1e-3):
     """
@@ -2144,7 +2216,6 @@ def _resolve_degenerate_excitons(Omega_S, A_coeff, r_b_x_flat, r_b_y_flat,
         i = j
 
     return A_rot
-
 
 def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
                                   E_range=(0.0, 1.0), eta=0.010,
@@ -2275,8 +2346,11 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
               f"|d_x|² = {osc_x[si]:.4e}, |d_y|² = {osc_y[si]:.4e}  ({pol})")
 
     # 6. Compute properties for each selected exciton
-    # Layer labels for the 4 orbitals (sublattice basis): [top_A, top_B, bot_A, bot_B]
-    layer_labels = ['Top A', 'Top B', 'Bot A', 'Bot B']
+    layer_labels = []
+    for layer in range(N_top):
+        layer_labels.extend([f'T{layer+1} A', f'T{layer+1} B'])
+    for layer in range(N_bottom):
+        layer_labels.extend([f'B{layer+1} A', f'B{layer+1} B'])
 
     # Real-space grid from FFT
     rx = np.fft.fftshift(np.fft.fftfreq(n_k_bse, d=dk/(2*np.pi)))
@@ -2346,10 +2420,11 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
         rho_h /= np.sum(rho_h)
 
         # Group into Top / Bottom for cleaner display
-        rho_e_top = rho_e[0] + rho_e[1]
-        rho_e_bot = rho_e[2] + rho_e[3] if Nb == 4 else 0.0
-        rho_h_top = rho_h[0] + rho_h[1]
-        rho_h_bot = rho_h[2] + rho_h[3] if Nb == 4 else 0.0
+        split = 2 * N_top
+        rho_e_top = np.sum(rho_e[:split])
+        rho_e_bot = np.sum(rho_e[split:]) if N_bottom > 0 else 0.0
+        rho_h_top = np.sum(rho_h[:split])
+        rho_h_bot = np.sum(rho_h[split:]) if N_bottom > 0 else 0.0
 
         ax = axes[row, 2]
         x_pos = np.arange(Nb)
@@ -2381,7 +2456,6 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"\nSaved: {fname}")
 
     return Omega_S, A_coeff, bright_idx
-
 
 def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
                                          twist_angle=0.0,
@@ -2540,10 +2614,7 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
         rho_e /= np.sum(rho_e)
         rho_h /= np.sum(rho_h)
 
-        z_orb = np.zeros(Nb)
-        z_orb[0:2] = +thickness * N_top / 2.0
-        if Nb == 4:
-            z_orb[2:4] = -thickness * N_bottom / 2.0
+        z_orb = model.get_orbital_z_positions(thickness)
 
         z_e = float(np.dot(rho_e, z_orb))
         z_h = float(np.dot(rho_h, z_orb))
@@ -2574,10 +2645,11 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
         peak_energy = float(omegas[i_pk])
         peak_value = float(sigma_zxx[i_pk])
 
-        rho_e_top = float(np.sum(rho_e[:2]))
-        rho_h_top = float(np.sum(rho_h[:2]))
-        rho_e_bot = float(np.sum(rho_e[2:])) if Nb == 4 else 0.0
-        rho_h_bot = float(np.sum(rho_h[2:])) if Nb == 4 else 0.0
+        split = 2 * N_top
+        rho_e_top = float(np.sum(rho_e[:split]))
+        rho_h_top = float(np.sum(rho_h[:split]))
+        rho_e_bot = float(np.sum(rho_e[split:])) if N_bottom > 0 else 0.0
+        rho_h_bot = float(np.sum(rho_h[split:])) if N_bottom > 0 else 0.0
 
         print(f"  Lowest x-bright exciton: E={Omega_S[idx_sel]:.4f} eV, |d_x|^2={osc_x[idx_sel]:.4e}")
         print(f"  Layer weights: e(top/bot)=({rho_e_top:.3f}/{rho_e_bot:.3f}), "
@@ -2654,7 +2726,6 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
     print(f"Saved: {fname_corr}")
 
     return results
-
 
 def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
                                       E_range=(0.0, 1.0),
@@ -2806,12 +2877,11 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
     plt.close()
     print(f"\nSaved: {fname}")
 
-
 if __name__ == "__main__":
 
     # BP parameters
-    b_lat = 4.588
     a_lat = 3.296
+    b_lat = 4.588
     G_moire = 2 * np.pi * np.abs(1/b_lat - 1/a_lat)
     n_top = 3
     n_bottom = 3
@@ -2819,7 +2889,7 @@ if __name__ == "__main__":
     kappa=5.0
     r0=6.0
     # twist_angle = 0.0
-    erange = (0.0, 2.00)
+    erange = (0.0, 1.20)
 
     # single k point test
     # --------------------------------------------
@@ -2830,26 +2900,27 @@ if __name__ == "__main__":
     print("Eigenvalues at Gamma:", np.linalg.eigvalsh(H_test[0]))
 
     # Band structure
-    # # --------------------------------------------
+    # --------------------------------------------
     cal_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-              k_fine_steps=200, y_lim=(-2.5,2.5))
+              k_fine_steps=200, y_lim=(-1.0,1.0))
 
-    # # # 3D Band Structure
-    # # # --------------------------------------------
-    # # plot_3d_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    # #               k_range=G_moire/2, n_grid=60,
-    # #               view_elev=15, view_azim=45)
-                  
-    # # # Optical Conductivity
-    # # # --------------------------------------------
+    # # 3D Band Structure
+    # # --------------------------------------------
+    # plot_3d_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #               k_range=G_moire/2, n_grid=60,
+    #               view_elev=15, view_azim=45)
+    
+    # # Optical Conductivity
+    # # --------------------------------------------
     # calculate_optical_conductivity(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
     #                                n_k=160, n_E=500,eta=0.010,
+    #                                band_pairs=[(5, 6), (4, 6), (3, 6), (2, 6), ],
     #                                k_range=G_moire/2, E_range=erange)
                                    
-    # # # Matrix Element Map (VBM -> CBM)
-    # # # --------------------------------------------
+    # # Matrix Element Map (VBM -> CBM)
+    # # --------------------------------------------
     # plot_transition_matrix_elements(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                 # band_indices=(0, 3),
+    #                                 band_indices=(4, 6),
     #                                 k_range=G_moire/2, n_k=160)
     
     # # # Bandgap scaling with N_bottom
@@ -2861,22 +2932,22 @@ if __name__ == "__main__":
     # # # Shift Current Calculation
     # # # --------------------------------------------   
     # calculate_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle, 
-    #                         n_k=240, n_E=100,
+    #                         n_k=160, n_E=100,
     #                         E_range=erange, k_range=G_moire/2,)
 
-    # # # Z-direction (out-of-plane) Shift Current
-    # # # --------------------------------------------
-    # calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                           n_k=240, n_E=250,
-    #                         #   band_window=[0,1,2,2],
-    #                           E_range=erange, k_range=G_moire/2)
-
-    # # BSE Excitonic Z-Shift Current
+    # # Z-direction (out-of-plane) Shift Current
     # # --------------------------------------------
-    calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                   n_k_bse=30, n_val=4, n_cond=1,
-                                   E_range=erange, k_range=G_moire/2,
-                                   kappa=kappa, r0=r0,)
+    calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                              n_k=160, n_E=250,
+                            #   band_window=[0,1,2,2],
+                              E_range=erange, k_range=G_moire/2)
+
+    # # # BSE Excitonic Z-Shift Current
+    # # # --------------------------------------------
+    # calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                n_k_bse=30, n_val=2, n_cond=2,
+    #                                E_range=erange, k_range=G_moire/2,
+    #                                kappa=kappa, r0=r0,)
 
     # # # Exciton Oscillator Strength (stem plot)
     # # # --------------------------------------------
