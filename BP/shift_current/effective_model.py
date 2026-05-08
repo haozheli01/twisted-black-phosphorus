@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.linalg import eigh as scipy_eigh
 from scipy.sparse.linalg import eigsh
+import time
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 mpl.rcParams['font.family'] = 'Arial'
@@ -62,37 +63,54 @@ class TwistedBPModel:
         self.t4p=-0.168
         # self.t5p=0.005 # we dont use this here
 
+        # Precomputed geometric factors (k-independent, used in all H/v/w methods)
+        sx = self.a1 * np.sin(self.alpha1 / 2)
+        cx = self.a1 * np.cos(self.alpha1 / 2)
+        cy = self.a2 * np.cos(self.beta)
+        ay = self.alpha2 * np.cos(self.beta)
+        self._p1  = 2 * sx
+        self._p2  = sx
+        self._p3  = cx
+        self._p4  = cx + 2 * cy
+        self._p5  = cy
+        self._p6  = 2 * cx + cy
+        self._p8  = cx + cy
+        self._p9  = 3 * sx
+        self._p10 = 2 * sx + cy
+        self._q1  = 2 * sx + 2 * ay
+        self._q2  = sx + ay
+        self._pf_top = np.cos(np.pi * self.N_top / (self.N_top + 1))
+        self._pf_bot = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1)) if self.N_bottom > 0 else 0.0
+
     def basic_block(self, k_points, twist_angle):
-        """
-        Compute the basic Hamiltonian for given k-points.
-        """
+        """Compute the basic Hamiltonian for given k-points."""
         k_points = np.atleast_2d(k_points)
         kx_tmp, ky_tmp = k_points[:, 0], k_points[:, 1]
         kx = kx_tmp * np.cos(twist_angle) - ky_tmp * np.sin(twist_angle)
         ky = kx_tmp * np.sin(twist_angle) + ky_tmp * np.cos(twist_angle)
 
         # Intralayer terms
-        tAA = 2 * self.t3 * np.cos(2 * self.a1 * np.sin(self.alpha1/2) * kx ) \
-            + 2 * self.t7 * np.cos((2 * self.a1 * np.sin(self.alpha1/2) + 2 * self.alpha2 * np.cos(self.beta)) * ky) \
-            + 4 * self.t10 * np.cos(2 * self.a1 * np.sin(self.alpha1/2) * kx) * np.cos((2 * self.a1 * np.sin(self.alpha1/2) + 2 * self.alpha2 * np.cos(self.beta)) * ky)
-        
-        tAB = 2 * self.t1 * np.cos(self.a1 * np.sin(self.alpha1/2) * kx ) * np.exp(-1j * (self.a1 * np.cos(self.alpha1/2) * ky)) \
-            + 2 * self.t4 * np.cos(self.a1 * np.sin(self.alpha1/2) * kx ) * np.exp(1j * (self.a1 * np.cos(self.alpha1/2) + 2 * self.a2 * np.cos(self.beta)) * ky) \
-            + 2 * self.t8 * np.cos(3 * self.a1 * np.sin(self.alpha1/2) * kx) * np.exp(-1j * (self.a1 * np.cos(self.alpha1/2) * ky))
-        
-        tAC = self.t2 * np.exp(1j * self.a2 * np.cos(self.beta) * ky) \
-            + self.t6 * np.exp(-1j * (2 * self.a1 * np.cos(self.alpha1/2) + self.a2 * np.cos(self.beta)) * ky) \
-            + 2 * self.t9 * np.cos(2 * self.a1 * np.sin(self.alpha1/2) * kx) * np.exp(-1j * (self.a2 * np.cos(self.beta) + 2 * self.a1 * np.cos(self.alpha1/2)) * ky)
-        
-        tAD = 4 * self.t5 * np.cos(self.a1 * np.sin(self.alpha1/2) * kx) * np.cos((self.a1 * np.cos(self.alpha1/2) + self.a2 * np.cos(self.beta)) * ky)
+        tAA = (2 * self.t3 * np.cos(self._p1 * kx)
+               + 2 * self.t7 * np.cos(self._q1 * ky)
+               + 4 * self.t10 * np.cos(self._p1 * kx) * np.cos(self._q1 * ky))
+
+        tAB = (2 * self.t1 * np.cos(self._p2 * kx) * np.exp(-1j * self._p3 * ky)
+               + 2 * self.t4 * np.cos(self._p2 * kx) * np.exp(1j * self._p4 * ky)
+               + 2 * self.t8 * np.cos(self._p9 * kx) * np.exp(-1j * self._p3 * ky))
+
+        tAC = (self.t2 * np.exp(1j * self._p5 * ky)
+               + self.t6 * np.exp(-1j * self._p6 * ky)
+               + 2 * self.t9 * np.cos(self._p1 * kx) * np.exp(-1j * self._p6 * ky))
+
+        tAD = 4 * self.t5 * np.cos(self._p2 * kx) * np.cos(self._p8 * ky)
 
         # Interlayer terms
-        tADp = (4 * self.t3p * np.cos(2 * self.a1 * np.sin(self.alpha1/2) * kx ) + 2* self.t2p) \
-            * np.cos((self.a1 * np.sin(self.alpha1/2) + self.alpha2 * np.cos(self.beta)) * ky)
-        
-        tACp = (2 * self.t1p * np.exp(1j * self.a2 * np.cos(self.beta) * ky) + 2 * self.t4p * np.exp(-1j * (2 * self.a1 * np.sin(self.alpha1/2) + self.a2 * np.cos(self.beta)) * ky)) \
-            * np.cos(2 * self.a1 * np.sin(self.alpha1/2) * kx)
-    
+        tADp = ((4 * self.t3p * np.cos(self._p1 * kx) + 2 * self.t2p)
+                * np.cos(self._q2 * ky))
+
+        tACp = ((2 * self.t1p * np.exp(1j * self._p5 * ky)
+                 + 2 * self.t4p * np.exp(-1j * self._p10 * ky))
+                * np.cos(self._p1 * kx))
 
         return tAA, tAB, tAC, tAD, tADp, tACp
 
@@ -106,10 +124,9 @@ class TwistedBPModel:
         num_k = len(k_points)
 
         # Top layer (untwisted)
-        prefactor = np.cos(np.pi * self.N_top / (self.N_top + 1))
         tAA, tAB, tAC, tAD, tADp, tACp = self.basic_block(k_points, twist_angle=0.0)
-        a_t = tAA + tAD + prefactor * tADp
-        z_t = tAB + tAC + prefactor * tACp
+        a_t = tAA + tAD + self._pf_top * tADp
+        z_t = tAB + tAC + self._pf_top * tACp
         ham_top = np.zeros((num_k, 2, 2), dtype=np.complex128)
         ham_top[:, 0, 0] = a_t
         ham_top[:, 1, 1] = a_t
@@ -120,10 +137,9 @@ class TwistedBPModel:
             return ham_top
 
         # Bottom layer (twisted)
-        prefactor = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
         tAA, tAB, tAC, tAD, tADp, tACp = self.basic_block(k_points, twist_angle=self.twist_angle)
-        a_b = tAA + tAD + prefactor * tADp
-        z_b = tAB + tAC + prefactor * tACp
+        a_b = tAA + tAD + self._pf_bot * tADp
+        z_b = tAB + tAC + self._pf_bot * tACp
         ham_bot = np.zeros((num_k, 2, 2), dtype=np.complex128)
         ham_bot[:, 0, 0] = a_b
         ham_bot[:, 1, 1] = a_b
@@ -152,45 +168,41 @@ class TwistedBPModel:
         Returns (dH0_x, dH0_y, dH2_x, dH2_y, dH3_x, dH3_y), each (Nk, 2, 2).
         """
         k_points = np.atleast_2d(k_points)
-        num_k = len(k_points)
         c = np.cos(twist_angle)
         s = np.sin(twist_angle)
         kx_tmp, ky_tmp = k_points[:, 0], k_points[:, 1]
         kx = kx_tmp * c - ky_tmp * s
         ky = kx_tmp * s + ky_tmp * c
 
-        # Geometric projections
-        sx = self.a1 * np.sin(self.alpha1 / 2)
-        cx = self.a1 * np.cos(self.alpha1 / 2)
-        cy = self.a2 * np.cos(self.beta)
-        ay = self.alpha2 * np.cos(self.beta)
-
-        p1 = 2 * sx;  p2 = sx;  p3 = cx;  p4 = cx + 2 * cy
-        p5 = cy;  p6 = 2 * cx + cy;  p8 = cx + cy;  p9 = 3 * sx
-        q1 = 2 * sx + 2 * ay;  q2 = sx + ay;  p10 = 2 * sx + cy
+        # Aliases for precomputed geometric projections
+        p1, p2, p3, p4, p5, p6 = self._p1, self._p2, self._p3, self._p4, self._p5, self._p6
+        p8, p9, p10 = self._p8, self._p9, self._p10
+        q1, q2 = self._q1, self._q2
 
         # === Local derivatives of each element ===
         # dtAA/dkx, dtAA/dky
-        dtAA_x = -2 * self.t3 * p1 * np.sin(p1 * kx) \
-                 - 4 * self.t10 * p1 * np.sin(p1 * kx) * np.cos(q1 * ky)
-        dtAA_y = -2 * self.t7 * q1 * np.sin(q1 * ky) \
-                 - 4 * self.t10 * np.cos(p1 * kx) * q1 * np.sin(q1 * ky)
+        dtAA_x = (-2 * self.t3 * p1 * np.sin(p1 * kx)
+                  - 4 * self.t10 * p1 * np.sin(p1 * kx) * np.cos(q1 * ky))
+        dtAA_y = (-2 * self.t7 * q1 * np.sin(q1 * ky)
+                  - 4 * self.t10 * np.cos(p1 * kx) * q1 * np.sin(q1 * ky))
 
         # dtAB/dkx, dtAB/dky
-        e1 = np.exp(-1j * p3 * ky);  e4 = np.exp(1j * p4 * ky)
-        dtAB_x = -2 * self.t1 * p2 * np.sin(p2 * kx) * e1 \
-                 - 2 * self.t4 * p2 * np.sin(p2 * kx) * e4 \
-                 - 2 * self.t8 * p9 * np.sin(p9 * kx) * e1
-        dtAB_y = 2 * self.t1 * np.cos(p2 * kx) * (-1j * p3) * e1 \
-               + 2 * self.t4 * np.cos(p2 * kx) * (1j * p4) * e4 \
-               + 2 * self.t8 * np.cos(p9 * kx) * (-1j * p3) * e1
+        e1 = np.exp(-1j * p3 * ky)
+        e4 = np.exp(1j * p4 * ky)
+        dtAB_x = (-2 * self.t1 * p2 * np.sin(p2 * kx) * e1
+                  - 2 * self.t4 * p2 * np.sin(p2 * kx) * e4
+                  - 2 * self.t8 * p9 * np.sin(p9 * kx) * e1)
+        dtAB_y = (2 * self.t1 * np.cos(p2 * kx) * (-1j * p3) * e1
+                  + 2 * self.t4 * np.cos(p2 * kx) * (1j * p4) * e4
+                  + 2 * self.t8 * np.cos(p9 * kx) * (-1j * p3) * e1)
 
         # dtAC/dkx, dtAC/dky
-        e5 = np.exp(1j * p5 * ky);  e6 = np.exp(-1j * p6 * ky)
+        e5 = np.exp(1j * p5 * ky)
+        e6 = np.exp(-1j * p6 * ky)
         dtAC_x = -2 * self.t9 * p1 * np.sin(p1 * kx) * e6
-        dtAC_y = self.t2 * (1j * p5) * e5 \
-               + self.t6 * (-1j * p6) * e6 \
-               + 2 * self.t9 * np.cos(p1 * kx) * (-1j * p6) * e6
+        dtAC_y = (self.t2 * (1j * p5) * e5
+                  + self.t6 * (-1j * p6) * e6
+                  + 2 * self.t9 * np.cos(p1 * kx) * (-1j * p6) * e6)
 
         # dtAD/dkx, dtAD/dky
         dtAD_x = -4 * self.t5 * p2 * np.sin(p2 * kx) * np.cos(p8 * ky)
@@ -217,11 +229,11 @@ class TwistedBPModel:
         gtADp_x, gtADp_y = to_global(dtADp_x, dtADp_y)
         gtACp_x, gtACp_y = to_global(dtACp_x, dtACp_y)
 
-        return (gtAA_x, gtAA_y, 
-                gtAB_x, gtAB_y, 
-                gtAC_x, gtAC_y, 
-                gtAD_x, gtAD_y, 
-                gtADp_x, gtADp_y, 
+        return (gtAA_x, gtAA_y,
+                gtAB_x, gtAB_y,
+                gtAC_x, gtAC_y,
+                gtAD_x, gtAD_y,
+                gtADp_x, gtADp_y,
                 gtACp_x, gtACp_y)
 
     def basic_block_curvature(self, k_points, twist_angle):
@@ -232,22 +244,16 @@ class TwistedBPModel:
                  d2H3_xx, d2H3_yy, d2H3_xy), each (Nk, 2, 2).
         """
         k_points = np.atleast_2d(k_points)
-        num_k = len(k_points)
         c = np.cos(twist_angle)
         s = np.sin(twist_angle)
         kx_tmp, ky_tmp = k_points[:, 0], k_points[:, 1]
         kx = kx_tmp * c - ky_tmp * s
         ky = kx_tmp * s + ky_tmp * c
 
-        # Geometric projections (same as velocity)
-        sx = self.a1 * np.sin(self.alpha1 / 2)
-        cx = self.a1 * np.cos(self.alpha1 / 2)
-        cy = self.a2 * np.cos(self.beta)
-        ay = self.alpha2 * np.cos(self.beta)
-
-        p1 = 2 * sx;  p2 = sx;  p3 = cx;  p4 = cx + 2 * cy
-        p5 = cy;  p6 = 2 * cx + cy;  p8 = cx + cy;  p9 = 3 * sx
-        q1 = 2 * sx + 2 * ay;  q2 = sx + ay;  p10 = 2 * sx + cy
+        # Aliases for precomputed geometric projections
+        p1, p2, p3, p4, p5, p6 = self._p1, self._p2, self._p3, self._p4, self._p5, self._p6
+        p8, p9, p10 = self._p8, self._p9, self._p10
+        q1, q2 = self._q1, self._q2
 
         # Precompute trig/exp factors
         cos_p1kx = np.cos(p1 * kx);  sin_p1kx = np.sin(p1 * kx)
@@ -267,20 +273,20 @@ class TwistedBPModel:
         d2tAA_xy = 4 * self.t10 * p1 * sin_p1kx * q1 * sin_q1ky
 
         # tAB
-        d2tAB_xx = -2 * self.t1 * p2**2 * cos_p2kx * e1 \
-                   - 2 * self.t4 * p2**2 * cos_p2kx * e4 \
-                   - 2 * self.t8 * p9**2 * cos_p9kx * e1
-        d2tAB_yy = -2 * self.t1 * p3**2 * cos_p2kx * e1 \
-                   - 2 * self.t4 * p4**2 * cos_p2kx * e4 \
-                   - 2 * self.t8 * p3**2 * cos_p9kx * e1
-        d2tAB_xy = 2 * self.t1 * p2 * p3 * 1j * sin_p2kx * e1 \
-                 - 2 * self.t4 * p2 * p4 * 1j * sin_p2kx * e4 \
-                 + 2 * self.t8 * p9 * p3 * 1j * sin_p9kx * e1
+        d2tAB_xx = (-2 * self.t1 * p2**2 * cos_p2kx * e1
+                    - 2 * self.t4 * p2**2 * cos_p2kx * e4
+                    - 2 * self.t8 * p9**2 * cos_p9kx * e1)
+        d2tAB_yy = (-2 * self.t1 * p3**2 * cos_p2kx * e1
+                    - 2 * self.t4 * p4**2 * cos_p2kx * e4
+                    - 2 * self.t8 * p3**2 * cos_p9kx * e1)
+        d2tAB_xy = (2 * self.t1 * p2 * p3 * 1j * sin_p2kx * e1
+                    - 2 * self.t4 * p2 * p4 * 1j * sin_p2kx * e4
+                    + 2 * self.t8 * p9 * p3 * 1j * sin_p9kx * e1)
 
         # tAC
         d2tAC_xx = -2 * self.t9 * p1**2 * cos_p1kx * e6
-        d2tAC_yy = -self.t2 * p5**2 * e5 - self.t6 * p6**2 * e6 \
-                   - 2 * self.t9 * p6**2 * cos_p1kx * e6
+        d2tAC_yy = (-self.t2 * p5**2 * e5 - self.t6 * p6**2 * e6
+                    - 2 * self.t9 * p6**2 * cos_p1kx * e6)
         d2tAC_xy = 2 * self.t9 * p1 * p6 * 1j * sin_p1kx * e6
 
         # tAD
@@ -374,14 +380,12 @@ class TwistedBPModel:
         k_points = np.atleast_2d(k_points)
         num_k = len(k_points)
 
-        pf_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
-        vx_t, vy_t = self._layer_velocity(k_points, 0.0, pf_t)
+        vx_t, vy_t = self._layer_velocity(k_points, 0.0, self._pf_top)
 
         if self.N_bottom == 0:
             return vx_t, vy_t
 
-        pf_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
-        vx_b, vy_b = self._layer_velocity(k_points, self.twist_angle, pf_b)
+        vx_b, vy_b = self._layer_velocity(k_points, self.twist_angle, self._pf_bot)
 
         # Interlayer coupling derivatives are all zeros since we assume a constant coupling strength
 
@@ -441,14 +445,12 @@ class TwistedBPModel:
         k_points = np.atleast_2d(k_points)
         num_k = len(k_points)
 
-        pf_t = np.cos(np.pi * self.N_top / (self.N_top + 1))
-        wxx_t, wyy_t, wxy_t = self._layer_curvature(k_points, 0.0, pf_t)
+        wxx_t, wyy_t, wxy_t = self._layer_curvature(k_points, 0.0, self._pf_top)
 
         if self.N_bottom == 0:
             return wxx_t, wyy_t, wxy_t
 
-        pf_b = np.cos(np.pi * self.N_bottom / (self.N_bottom + 1))
-        wxx_b, wyy_b, wxy_b = self._layer_curvature(k_points, self.twist_angle, pf_b)
+        wxx_b, wyy_b, wxy_b = self._layer_curvature(k_points, self.twist_angle, self._pf_bot)
 
         # Interlayer coupling second derivatives are also zeros since we assume a constant coupling strength
 
@@ -1262,6 +1264,128 @@ def build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc, kappa=2.5,
     return H_bse
 
 
+def _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
+                      thickness=None, kappa=2.5, r0=5.0, band_window=None):
+    """
+    Single-particle solve + BSE diagonalization + degenerate-subspace resolution.
+
+    Encapsulates the shared boilerplate used by all BSE analysis functions.
+    Returns a dict with all intermediate quantities; callers extract what they need.
+
+    When *thickness* is not None, also computes the z-operator diagonal elements.
+    """
+    # 1. k-grid
+    kx = np.linspace(-k_range, k_range, n_k_bse)
+    ky = np.linspace(-k_range, k_range, n_k_bse)
+    KX, KY = np.meshgrid(kx, ky)
+    k_points = np.column_stack([KX.flatten(), KY.flatten()])
+    Nk = len(k_points)
+    dk = kx[1] - kx[0]
+
+    # 2. Single-particle solve
+    print(f"  Diagonalizing H for {Nk} k-points...")
+    H_stack = model.get_hamiltonians(k_points)
+    evals, evecs = np.linalg.eigh(H_stack)
+    Nb = evals.shape[1]
+
+    # 3. Active band selection
+    mid = Nb // 2
+    if band_window is not None:
+        v_idx = np.arange(band_window[0], band_window[1] + 1)
+        c_idx = np.arange(band_window[2], band_window[3] + 1)
+    else:
+        v_idx = np.arange(mid - n_val, mid)
+        c_idx = np.arange(mid, mid + n_cond)
+    Nv, Nc = len(v_idx), len(c_idx)
+    qp_gap = np.min(evals[:, c_idx[0]] - evals[:, v_idx[-1]])
+    print(f"  Bands: valence {v_idx}, conduction {c_idx}, QP gap: {qp_gap:.4f} eV")
+
+    # 4. Velocity in eigenbasis
+    print(f"  Computing velocity matrices...")
+    vx_orb, vy_orb = model.get_velocity_matrices(k_points)
+    U = evecs
+    U_dag = np.conj(np.transpose(U, (0, 2, 1)))
+    vx_eig = U_dag @ vx_orb @ U
+    vy_eig = U_dag @ vy_orb @ U
+
+    # 5. Interband position matrix elements  r^b_{cv} = v^b_{cv} / (i * omega_{cv})
+    E_v = evals[:, v_idx]
+    E_c = evals[:, c_idx]
+    dE = E_c[:, None, :] - E_v[:, :, None]  # (Nk, Nv, Nc)
+
+    eps_denom = 1e-5
+    r_b = {}
+    for b_dir, v_b in [('x', vx_eig), ('y', vy_eig)]:
+        vb_cv = np.transpose(v_b[:, c_idx, :][:, :, v_idx], (0, 2, 1))
+        rb = np.zeros_like(vb_cv)
+        valid = np.abs(dE) > eps_denom
+        rb[valid] = vb_cv[valid] / (1j * dE[valid])
+        r_b[b_dir] = rb
+
+    # 6. z-operator (only when thickness is provided)
+    z_diag = None
+    delta_z = None
+    if thickness is not None:
+        z_op = np.zeros((Nb, Nb), dtype=np.float64)
+        z_op[0, 0] = +thickness * model.N_top / 2.0
+        z_op[1, 1] = +thickness * model.N_top / 2.0
+        if Nb == 4:
+            z_op[2, 2] = -thickness * model.N_bottom / 2.0
+            z_op[3, 3] = -thickness * model.N_bottom / 2.0
+        z_eig = U_dag @ z_op @ U
+        z_diag = np.real(np.diagonal(z_eig, axis1=1, axis2=2))
+        z_v = z_diag[:, v_idx]
+        z_c = z_diag[:, c_idx]
+        delta_z = z_v[:, :, None] - z_c[:, None, :]  # (Nk, Nv, Nc)
+
+    # 7. BSE Hamiltonian
+    a_lat = model.a_lat
+    b_lat = model.b_lat
+    A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
+    print(f"  Moire unit cell area: {A_uc:.1f} A^2")
+
+    dim_bse = Nv * Nc * Nk
+    print(f"  Building BSE Hamiltonian ({Nv}v x {Nc}c x {Nk}k = {dim_bse} basis)...")
+    H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
+                                   kappa=kappa, r0=r0,
+                                   N_top=model.N_top, N_bottom=model.N_bottom)
+
+    # 8. Diagonalize BSE
+    dim_bse_mat = H_bse.shape[0]
+    n_exciton_max = min(1000, dim_bse_mat - 2)
+    print(f"  Diagonalizing BSE ({dim_bse_mat}x{dim_bse_mat})...")
+    t0 = time.time()
+    if dim_bse_mat > 10000:
+        print(f"    Using sparse eigsh (lowest {n_exciton_max} states)...")
+        Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
+        sort_idx = np.argsort(Omega_S)
+        Omega_S = Omega_S[sort_idx]
+        A_coeff = A_coeff[:, sort_idx]
+    else:
+        Omega_S, A_coeff = scipy_eigh(H_bse, driver='evd')
+    dt = time.time() - t0
+    del H_bse
+    print(f"    Done in {dt:.1f} s")
+    print(f"    Exciton energy range: {Omega_S[0]:.4f} - {Omega_S[-1]:.4f} eV")
+    print(f"    Lowest exciton: {Omega_S[0]:.4f} eV  (QP gap ~ {np.min(dE):.4f} eV)")
+    print(f"    Binding energy: {np.min(dE) - Omega_S[0]:.4f} eV")
+
+    # 9. Resolve degenerate excitons into polarization eigenstates
+    r_x_flat = r_b['x'].reshape(dim_bse)
+    r_y_flat = r_b['y'].reshape(dim_bse)
+    A_coeff = _resolve_degenerate_excitons(Omega_S, A_coeff, r_x_flat, r_y_flat)
+
+    return {
+        'k_points': k_points, 'KX': KX, 'KY': KY, 'Nk': Nk, 'dk': dk,
+        'evals': evals, 'evecs': evecs, 'Nb': Nb,
+        'v_idx': v_idx, 'c_idx': c_idx, 'Nv': Nv, 'Nc': Nc,
+        'dE': dE, 'r_b': r_b, 'r_x_flat': r_x_flat, 'r_y_flat': r_y_flat,
+        'z_diag': z_diag, 'delta_z': delta_z,
+        'A_uc': A_uc, 'Omega_S': Omega_S, 'A_coeff': A_coeff, 'dim_bse': dim_bse,
+        'U': U, 'U_dag': U_dag, 'vx_eig': vx_eig, 'vy_eig': vy_eig,
+    }
+
+
 def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                                    E_range=(0.0, 1.0), n_E=400, eta=0.010,
                                    k_range=0.15, n_k_bse=30,
@@ -1304,204 +1428,82 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"  Grid: {n_k_bse}x{n_k_bse} = {n_k_bse**2} k-points")
     print(f"  Active space: {n_val}v x {n_cond}c")
     print(f"  BSE dimension: {n_val * n_cond * n_k_bse**2}")
-    print(f"  Keldysh params: kappa={kappa}, r0={r0} Å")
-    print(f"  thickness={thickness} Å")
+    print(f"  Keldysh params: kappa={kappa}, r0={r0} A")
+    print(f"  thickness={thickness} A")
 
-    # 1. Model & k-grid
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
 
-    kx = np.linspace(-k_range, k_range, n_k_bse)
-    ky = np.linspace(-k_range, k_range, n_k_bse)
-    KX, KY = np.meshgrid(kx, ky)
-    k_points = np.column_stack([KX.flatten(), KY.flatten()])
-    Nk = len(k_points)
+    print(f"\n[1-4] Running BSE pipeline...")
+    pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
+                             thickness=thickness, kappa=kappa, r0=r0,
+                             band_window=band_window)
 
-    # 2. Single-particle solve
-    print(f"\n[1] Diagonalizing H for {Nk} k-points...")
-    H_stack = model.get_hamiltonians(k_points)
-    evals, evecs = np.linalg.eigh(H_stack)
-    Nb = evals.shape[1]
+    Nk = pipe['Nk']
+    dE = pipe['dE']
+    r_b = pipe['r_b']
+    delta_z = pipe['delta_z']
+    Omega_S = pipe['Omega_S']
+    A_coeff = pipe['A_coeff']
+    dim_bse = pipe['dim_bse']
 
-    # 3. Select active bands near the gap
-    mid = Nb // 2
-    if band_window is not None:
-        v_idx = np.arange(band_window[0], band_window[1] + 1)
-        c_idx = np.arange(band_window[2], band_window[3] + 1)
-    else:
-        v_idx = np.arange(mid - n_val, mid)
-        c_idx = np.arange(mid, mid + n_cond)
-
-    Nv = len(v_idx)
-    Nc = len(c_idx)
-    print(f"  Bands: valence {v_idx}, conduction {c_idx}")
-    print(f"  QP gap range: {np.min(evals[:, c_idx[0]] - evals[:, v_idx[-1]]):.4f} - "
-          f"{np.max(evals[:, c_idx[-1]] - evals[:, v_idx[0]]):.4f} eV")
-
-    # 4. Velocity matrices in eigenbasis
-    print(f"\n[2] Computing velocity and z-operator...")
-    vx_orb, vy_orb = model.get_velocity_matrices(k_points)
-    U = evecs
-    U_dag = np.conj(np.transpose(U, (0, 2, 1)))
-
-    vx_eig = U_dag @ vx_orb @ U  # (Nk, Nb, Nb)
-    vy_eig = U_dag @ vy_orb @ U
-
-    # 5. z-operator diagonal in eigenbasis
-    dim_H = Nb
-    z_op = np.zeros((dim_H, dim_H), dtype=np.float64)
-    z_op[0, 0] = +thickness * N_top / 2.0  # top sub-A
-    z_op[1, 1] = +thickness * N_top / 2.0  # top sub-B
-    if dim_H == 4:
-        z_op[2, 2] = -thickness * N_bottom / 2.0  # bottom sub-A
-        z_op[3, 3] = -thickness * N_bottom / 2.0  # bottom sub-B
-
-    z_eig = U_dag @ z_op @ U
-    z_diag = np.real(np.diagonal(z_eig, axis1=1, axis2=2))  # (Nk, Nb)
-
-    # delta_z[k, v, c] = z_vv(k) - z_cc(k) for each (v, c) pair
-    z_v = z_diag[:, v_idx]  # (Nk, Nv)
-    z_c = z_diag[:, c_idx]  # (Nk, Nc)
-    delta_z = z_v[:, :, None] - z_c[:, None, :]  # (Nk, Nv, Nc)
-
-    # 6. Interband position matrix elements r^b_{cv}(k) = v^b_{cv} / (i * omega_{cv})
-    E_v_arr = evals[:, v_idx]  # (Nk, Nv)
-    E_c_arr = evals[:, c_idx]  # (Nk, Nc)
-    dE = E_c_arr[:, None, :] - E_v_arr[:, :, None]  # (Nk, Nv, Nc)
-
-    eps_denom = 1e-5
-    v_eig_map = {'x': vx_eig, 'y': vy_eig}
-
-    # r^b_{cv}(k) for each direction — shape (Nk, Nv, Nc)
-    r_b = {}
-    for b_dir in ['x', 'y']:
-        v_b = v_eig_map[b_dir]
-        vb_cv = v_b[:, c_idx, :][:, :, v_idx]  # (Nk, Nc, Nv)
-        vb_cv = np.transpose(vb_cv, (0, 2, 1))  # (Nk, Nv, Nc)
-        rb = np.zeros_like(vb_cv)
-        valid = np.abs(dE) > eps_denom
-        rb[valid] = vb_cv[valid] / (1j * dE[valid])
-        r_b[b_dir] = rb  # (Nk, Nv, Nc)
-
-    # 7. Build & diagonalize BSE Hamiltonian
-    # Moiré unit cell area
     a_lat = model.a_lat
     b_lat = model.b_lat
     A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
     V_uc = A_uc * thickness * (N_top + N_bottom)
-    print(f"  Moiré unit cell area: {A_uc:.1f} Å²")
-    print(f"  Unit cell volume: {V_uc:.1f} Å³")
 
-    print(f"\n[3] Building BSE Hamiltonian...")
-    H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
-                                   kappa=kappa, r0=r0, N_top=N_top, N_bottom=N_bottom)
-
-    print(f"\n[4] Diagonalizing BSE ({H_bse.shape[0]}x{H_bse.shape[0]})...")
-    import time
-    t0 = time.time()
-    dim_bse_mat = H_bse.shape[0]
-    n_exciton_max = min(1000, dim_bse_mat - 2)
-    if dim_bse_mat > 10000:
-        print(f"    Using sparse eigsh (lowest {n_exciton_max} states)...")
-        Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
-        sort_idx = np.argsort(Omega_S)
-        Omega_S = Omega_S[sort_idx]
-        A_coeff = A_coeff[:, sort_idx]
-    else:
-        Omega_S, A_coeff = scipy_eigh(H_bse, driver='evd')
-    dt = time.time() - t0
-    print(f"    Done in {dt:.1f} s")
-    print(f"    Exciton energy range: {Omega_S[0]:.4f} - {Omega_S[-1]:.4f} eV")
-    print(f"    Lowest exciton: {Omega_S[0]:.4f} eV  (QP gap ~ {np.min(dE):.4f} eV)")
-    print(f"    Binding energy estimate: {np.min(dE) - Omega_S[0]:.4f} eV")
-
-    # A_coeff[:, S] = expansion coefficients A^S_{vck}
-    # BSE basis order: I = k * (Nv*Nc) + v * Nc + c
-    dim_bse = Nv * Nc * Nk
-
-    # 8. Compute exciton optical dipole and z-shift vector
-    print(f"\n[5] Computing exciton observables...")
-
-    # Flatten single-particle quantities to BSE basis order: [k, v, c]
     delta_z_flat = delta_z.reshape(dim_bse)
-
     omegas = np.linspace(E_range[0], E_range[1], n_E)
     results = {}
 
+    print(f"\n[5] Computing exciton observables...")
     for comp in comp_list:
         a_dir, b_dir, c_dir = comp
         assert b_dir == c_dir, "z-shift current only for linearly polarized light (b==c)"
         print(f"  sigma^{{{a_dir}{b_dir}{c_dir}}}...")
 
-        r_b_flat = r_b[b_dir].reshape(dim_bse)  # (dim_bse,) complex
+        r_b_flat = r_b[b_dir].reshape(dim_bse)
 
-        # Gauge-invariant excitonic z-shift current formula:
-        #   σ(ω) = (C/Nk) Σ_S Re[d^{b*}_S × g^{bz}_S] × δ(ω - Ω_S)
-        #
-        # where d^b_S  = Σ_{vck} A^S_{vck} r^b_{cv}(k)           (exciton dipole)
-        #       g^{bz}_S = Σ_{vck} A^S_{vck} Δz(vck) r^b_{cv}(k)  (z-weighted dipole)
-        #
-        # This is gauge-invariant within degenerate exciton subspaces,
-        # unlike the naive |d|² × R^z formula.
+        d_b_S = A_coeff.conj().T @ r_b_flat
+        g_bz_S = A_coeff.conj().T @ (delta_z_flat * r_b_flat)
+        integrand_S = np.real(np.conj(d_b_S) * g_bz_S)
 
-        d_b_S = A_coeff.conj().T @ r_b_flat  # (N_excitons,) complex
-        g_bz_S = A_coeff.conj().T @ (delta_z_flat * r_b_flat)  # (N_excitons,) complex
-
-        integrand_S = np.real(np.conj(d_b_S) * g_bz_S)  # (N_excitons,) real
-
-        # F-sum rule check: BSE vs IPA integrated weights must match
         bse_sum = np.sum(integrand_S)
         ipa_sum = np.sum(np.real(delta_z_flat * np.abs(r_b_flat)**2))
         print(f"    F-sum check {a_dir}{b_dir}{c_dir}: BSE={bse_sum:.6e}, IPA={ipa_sum:.6e}, "
                 f"ratio={bse_sum/ipa_sum:.6f}")
 
-        # Assemble spectrum with Lorentzian broadening
-        diff = omegas[:, None] - Omega_S[None, :]  # (n_E, N_excitons)
+        diff = omegas[:, None] - Omega_S[None, :]
         lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
-        sigma = lorentz @ integrand_S  # (n_E,)
-
-        # 1/Nk BZ average
-        sigma /= Nk
+        sigma = lorentz @ integrand_S / Nk
         results[comp] = sigma
 
-    # 9. Physical prefactor (same as IPA)
     e_charge = 1.602176634e-19
     hbar = 1.054571817e-34
-    prefactor = (2 * np.pi * e_charge**2) / (hbar * V_uc) * 1E6  # -> µA/V²
-
+    prefactor = (2 * np.pi * e_charge**2) / (hbar * V_uc) * 1E6
     for comp in comp_list:
         results[comp] *= prefactor
 
-    # 10. Optionally compute IPA on the same grid for comparison
     ipa_results = None
     if plot_ipa_comparison:
         print(f"\n[6] Computing IPA comparison on same grid...")
         ipa_results = {}
         for comp in comp_list:
             a_dir, b_dir, c_dir = comp
-
             r_b_flat = r_b[b_dir].reshape(dim_bse)
             rb_sq = np.abs(r_b_flat)**2
-            dE_flat = dE.reshape(dim_bse)
-
             integrand_ipa = delta_z.reshape(dim_bse) * rb_sq
 
-            diff = omegas[:, None] - dE_flat[None, :]
+            diff = omegas[:, None] - dE.reshape(dim_bse)[None, :]
             lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
-            sigma_ipa = lorentz @ integrand_ipa / Nk
+            ipa_results[comp] = lorentz @ integrand_ipa / Nk * prefactor
 
-            sigma_ipa *= prefactor
-            ipa_results[comp] = sigma_ipa
-
-    # 11. Plotting
+    # Plotting
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-
     labels = {('z', 'x', 'x'): (r'$\sigma^{zxx}$', 'r'),
               ('z', 'y', 'y'): (r'$\sigma^{zyy}$', 'b')}
-
     for ax, comp in zip(axes, comp_list):
         lbl, col = labels[comp]
         ax.plot(omegas, results[comp], color=col, lw=2, label=f'BSE {lbl}')
-        print(f"    {lbl}: BSE shift current max={np.max(abs(results[comp])):.2f} µA·Å/V²")
         if ipa_results is not None:
             ax.plot(omegas, ipa_results[comp], color=col, lw=1.5, ls='--', alpha=0.6,
                     label=f'IPA {lbl}')
@@ -1515,16 +1517,15 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
 
     fig.suptitle(f'Excitonic Z-Shift Current (BSE, Effective Model)\n'
                  f'N={N_top}/{N_bottom}, twist={np.degrees(twist_angle):.0f}°, '
-                 f'kappa={kappa}, r0={r0} Å, d={thickness} Å, '
+                 f'kappa={kappa}, r0={r0} A, d={thickness} A, '
                  f'grid={n_k_bse}²', fontsize=11)
     plt.tight_layout()
-
     fname = f"EM_bse_z_sc{save_prefix}.png"
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"\nSaved BSE Z-Shift Current Figure: {fname}")
 
-    # 12. Exciton analysis plot
+    # Exciton analysis plot
     osc_data = {}
     shift_weight_data = {}
     delta_z_flat = delta_z.reshape(dim_bse)
@@ -1578,142 +1579,53 @@ def calculate_bse_absorbance(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"  Grid: {n_k_bse}x{n_k_bse} = {n_k_bse**2} k-points")
     print(f"  Active space: {n_val}v x {n_cond}c")
     print(f"  BSE dimension: {n_val * n_cond * n_k_bse**2}")
-    print(f"  Keldysh params: kappa={kappa}, r0={r0} Å")
+    print(f"  Keldysh params: kappa={kappa}, r0={r0} A")
 
-    # 1. Model & k-grid
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
 
-    kx = np.linspace(-k_range, k_range, n_k_bse)
-    ky = np.linspace(-k_range, k_range, n_k_bse)
-    KX, KY = np.meshgrid(kx, ky)
-    k_points = np.column_stack([KX.flatten(), KY.flatten()])
-    Nk = len(k_points)
+    print(f"\n[1-4] Running BSE pipeline...")
+    pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
+                             thickness=None, kappa=kappa, r0=r0,
+                             band_window=band_window)
 
-    # 2. Single-particle solve
-    print(f"\n[1] Diagonalizing H for {Nk} k-points...")
-    H_stack = model.get_hamiltonians(k_points)
-    evals, evecs = np.linalg.eigh(H_stack)
-    Nb = evals.shape[1]
+    Nk = pipe['Nk']
+    dE = pipe['dE']
+    r_b = pipe['r_b']
+    Omega_S = pipe['Omega_S']
+    A_coeff = pipe['A_coeff']
+    dim_bse = pipe['dim_bse']
 
-    # 3. Select active bands near the gap
-    mid = Nb // 2
-    if band_window is not None:
-        v_idx = np.arange(band_window[0], band_window[1] + 1)
-        c_idx = np.arange(band_window[2], band_window[3] + 1)
-    else:
-        v_idx = np.arange(mid - n_val, mid)
-        c_idx = np.arange(mid, mid + n_cond)
-
-    Nv = len(v_idx)
-    Nc = len(c_idx)
-    print(f"  Bands: valence {v_idx}, conduction {c_idx}")
-    print(f"  QP gap range: {np.min(evals[:, c_idx[0]] - evals[:, v_idx[-1]]):.4f} - "
-          f"{np.max(evals[:, c_idx[-1]] - evals[:, v_idx[0]]):.4f} eV")
-
-    # 4. Velocity matrices in eigenbasis
-    print(f"\n[2] Computing velocity matrices...")
-    vx_orb, vy_orb = model.get_velocity_matrices(k_points)
-    U = evecs
-    U_dag = np.conj(np.transpose(U, (0, 2, 1)))
-
-    vx_eig = U_dag @ vx_orb @ U  # (Nk, Nb, Nb)
-    vy_eig = U_dag @ vy_orb @ U
-
-    # 5. Interband position matrix elements r^b_{cv}(k) = v^b_{cv} / (i * omega_{cv})
-    E_v_arr = evals[:, v_idx]  # (Nk, Nv)
-    E_c_arr = evals[:, c_idx]  # (Nk, Nc)
-    dE = E_c_arr[:, None, :] - E_v_arr[:, :, None]  # (Nk, Nv, Nc)
-
-    eps_denom = 1e-5
-    v_eig_map = {'x': vx_eig, 'y': vy_eig}
-
-    r_b = {}
-    for b_dir in ['x', 'y']:
-        v_b = v_eig_map[b_dir]
-        vb_cv = v_b[:, c_idx, :][:, :, v_idx]  # (Nk, Nc, Nv)
-        vb_cv = np.transpose(vb_cv, (0, 2, 1))  # (Nk, Nv, Nc)
-        rb = np.zeros_like(vb_cv)
-        valid = np.abs(dE) > eps_denom
-        rb[valid] = vb_cv[valid] / (1j * dE[valid])
-        r_b[b_dir] = rb  # (Nk, Nv, Nc)
-
-    # 6. Build & diagonalize BSE Hamiltonian
-    a_lat = model.a_lat
-    b_lat = model.b_lat
-    A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
-    print(f"  Moiré unit cell area: {A_uc:.1f} Å²")
-
-    print(f"\n[3] Building BSE Hamiltonian...")
-    H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
-                                   kappa=kappa, r0=r0, N_top=N_top, N_bottom=N_bottom)
-
-    print(f"\n[4] Diagonalizing BSE ({H_bse.shape[0]}x{H_bse.shape[0]})...")
-    import time
-    t0 = time.time()
-    dim_bse_mat = H_bse.shape[0]
-    n_exciton_max = min(1000, dim_bse_mat - 2)
-    if dim_bse_mat > 10000:
-        print(f"    Using sparse eigsh (lowest {n_exciton_max} states)...")
-        Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
-        sort_idx = np.argsort(Omega_S)
-        Omega_S = Omega_S[sort_idx]
-        A_coeff = A_coeff[:, sort_idx]
-    else:
-        Omega_S, A_coeff = scipy_eigh(H_bse, driver='evd')
-    dt = time.time() - t0
-    print(f"    Done in {dt:.1f} s")
-    print(f"    Exciton energy range: {Omega_S[0]:.4f} - {Omega_S[-1]:.4f} eV")
-    print(f"    Lowest exciton: {Omega_S[0]:.4f} eV  (QP gap ~ {np.min(dE):.4f} eV)")
-    print(f"    Binding energy estimate: {np.min(dE) - Omega_S[0]:.4f} eV")
-    print(f"    Next Lowest exciton: {Omega_S[1]:.4f} eV  (QP gap ~ {np.min(dE):.4f} eV)")
-    print(f"    Binding energy estimate: {np.min(dE) - Omega_S[1]:.4f} eV")
-
-
-    dim_bse = Nv * Nc * Nk
-
-    # 7. Compute BSE absorbance
-    print(f"\n[5] Computing BSE absorbance spectrum...")
     omegas = np.linspace(E_range[0], E_range[1], n_E)
     abs_bse = {}
 
+    print(f"\n[5] Computing BSE absorbance spectrum...")
     for b_dir in ['x', 'y']:
         r_b_flat = r_b[b_dir].reshape(dim_bse)
-        d_b_S = A_coeff.conj().T @ r_b_flat  # (N_excitons,) complex
-        osc_S = np.abs(d_b_S)**2  # (N_excitons,)
+        d_b_S = A_coeff.conj().T @ r_b_flat
+        osc_S = np.abs(d_b_S)**2
 
-        # F-sum rule check: BSE vs IPA integrated oscillator strength must match
         bse_osc_sum = np.sum(osc_S)
         ipa_osc_sum = np.sum(np.abs(r_b_flat)**2)
         print(f"    F-sum check ({b_dir}-pol): BSE={bse_osc_sum:.6e}, IPA={ipa_osc_sum:.6e}, "
                 f"ratio={bse_osc_sum/ipa_osc_sum:.6f}")
 
-        # σ(ω) ∝ (1/Nk) Σ_S |d^b_S|² δ(ω - Ω_S)
         diff = omegas[:, None] - Omega_S[None, :]
         lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
-        sigma = lorentz @ osc_S / Nk
+        abs_bse[b_dir] = (lorentz @ osc_S / Nk) * omegas
 
-        # absorbance ∝ ω × σ
-        abs_bse[b_dir] = sigma * omegas
-
-    # 8. Optionally compute IPA absorbance on the same grid
     abs_ipa = None
     if plot_ipa_comparison:
         print(f"\n[6] Computing IPA comparison on same grid...")
         abs_ipa = {}
         dE_flat = dE.reshape(dim_bse)
-
         for b_dir in ['x', 'y']:
             rb_sq = np.abs(r_b[b_dir].reshape(dim_bse))**2
-
             diff = omegas[:, None] - dE_flat[None, :]
             lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
-            sigma_ipa = lorentz @ rb_sq / Nk
+            abs_ipa[b_dir] = (lorentz @ rb_sq / Nk) * omegas
 
-            abs_ipa[b_dir] = sigma_ipa * omegas
-
-    # 9. Plotting
+    # Plotting
     plt.figure(figsize=(8, 6))
-
     plt.plot(omegas, abs_bse['x'], 'r-', lw=2, label=r'BSE x-pol')
     plt.plot(omegas, abs_bse['y'], 'b--', lw=2, label=r'BSE y-pol')
     if abs_ipa is not None:
@@ -1724,7 +1636,7 @@ def calculate_bse_absorbance(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.ylabel('Optical Absorbance (a.u.)')
     plt.title(f'BSE Absorbance (Effective Model)\n'
               f'N={N_top}/{N_bottom}, twist={np.degrees(twist_angle):.0f}°, '
-              f'kappa={kappa}, r0={r0} Å, grid={n_k_bse}²')
+              f'kappa={kappa}, r0={r0} A, grid={n_k_bse}²')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.xlim(E_range)
@@ -1778,108 +1690,30 @@ def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"  Polarization: {polarization}")
     print(f"  Grid: {n_k_bse}x{n_k_bse} = {n_k_bse**2} k-points")
     print(f"  Active space: {n_val}v x {n_cond}c")
-    print(f"  Keldysh params: kappa={kappa}, r0={r0} Å")
+    print(f"  Keldysh params: kappa={kappa}, r0={r0} A")
 
-    # 1. Model & k-grid
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
 
-    kx = np.linspace(-k_range, k_range, n_k_bse)
-    ky = np.linspace(-k_range, k_range, n_k_bse)
-    KX, KY = np.meshgrid(kx, ky)
-    k_points = np.column_stack([KX.flatten(), KY.flatten()])
-    Nk = len(k_points)
+    print(f"\n[1-4] Running BSE pipeline...")
+    pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
+                             thickness=None, kappa=kappa, r0=r0,
+                             band_window=band_window)
 
-    # 2. Single-particle solve
-    print(f"\n[1] Diagonalizing H for {Nk} k-points...")
-    H_stack = model.get_hamiltonians(k_points)
-    evals, evecs = np.linalg.eigh(H_stack)
-    Nb = evals.shape[1]
+    Nk = pipe['Nk']
+    Omega_S = pipe['Omega_S']
+    A_coeff = pipe['A_coeff']
+    r_b = pipe['r_b']
+    dim_bse = pipe['dim_bse']
+    # r_x_flat, r_y_flat, and degenerate resolution already done by the pipeline
 
-    # 3. Select active bands
-    mid = Nb // 2
-    if band_window is not None:
-        v_idx = np.arange(band_window[0], band_window[1] + 1)
-        c_idx = np.arange(band_window[2], band_window[3] + 1)
-    else:
-        v_idx = np.arange(mid - n_val, mid)
-        c_idx = np.arange(mid, mid + n_cond)
-
-    Nv = len(v_idx)
-    Nc = len(c_idx)
-    print(f"  Bands: valence {v_idx}, conduction {c_idx}")
-    qp_gap = np.min(evals[:, c_idx[0]] - evals[:, v_idx[-1]])
-    print(f"  QP gap: {qp_gap:.4f} eV")
-
-    # 4. Velocity matrices in eigenbasis
-    print(f"\n[2] Computing velocity matrices...")
-    vx_orb, vy_orb = model.get_velocity_matrices(k_points)
-    U = evecs
-    U_dag = np.conj(np.transpose(U, (0, 2, 1)))
-
-    vx_eig = U_dag @ vx_orb @ U
-    vy_eig = U_dag @ vy_orb @ U
-
-    # 5. Interband position matrix elements r^b_{cv}(k)
-    E_v_arr = evals[:, v_idx]
-    E_c_arr = evals[:, c_idx]
-    dE = E_c_arr[:, None, :] - E_v_arr[:, :, None]  # (Nk, Nv, Nc)
-
-    eps_denom = 1e-5
-    v_eig_map = {'x': vx_eig, 'y': vy_eig}
-
-    r_b = {}
-    for b_dir in ['x', 'y']:
-        v_b = v_eig_map[b_dir]
-        vb_cv = v_b[:, c_idx, :][:, :, v_idx]
-        vb_cv = np.transpose(vb_cv, (0, 2, 1))  # (Nk, Nv, Nc)
-        rb = np.zeros_like(vb_cv)
-        valid = np.abs(dE) > eps_denom
-        rb[valid] = vb_cv[valid] / (1j * dE[valid])
-        r_b[b_dir] = rb
-
-    # 6. Build & diagonalize BSE Hamiltonian
-    a_lat = model.a_lat
-    b_lat = model.b_lat
-    A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
-
-    print(f"\n[3] Building BSE Hamiltonian...")
-    H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
-                                   kappa=kappa, r0=r0, N_top=N_top, N_bottom=N_bottom)
-
-    print(f"\n[4] Diagonalizing BSE ({H_bse.shape[0]}x{H_bse.shape[0]})...")
-    import time
-    t0 = time.time()
-    dim_bse_mat = H_bse.shape[0]
-    n_exciton_max = min(1000, dim_bse_mat - 2)
-    if dim_bse_mat > 10000:
-        print(f"    Using sparse eigsh (lowest {n_exciton_max} states)...")
-        Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
-        sort_idx = np.argsort(Omega_S)
-        Omega_S = Omega_S[sort_idx]
-        A_coeff = A_coeff[:, sort_idx]
-    else:
-        Omega_S, A_coeff = scipy_eigh(H_bse, driver='evd')
-    dt = time.time() - t0
-    print(f"    Done in {dt:.1f} s")
-    print(f"    Exciton energies: {Omega_S[0]:.4f} - {Omega_S[-1]:.4f} eV")
-    print(f"    Binding energy: {qp_gap - Omega_S[0]:.4f} eV")
-
-    dim_bse = Nv * Nc * Nk
-
-    # 7. Resolve degenerate excitons into polarization eigenstates
-    r_b_x_flat = r_b['x'].reshape(dim_bse)
-    r_b_y_flat = r_b['y'].reshape(dim_bse)
-    A_coeff = _resolve_degenerate_excitons(Omega_S, A_coeff,
-                                            r_b_x_flat, r_b_y_flat)
-
-    # 8. Compute oscillator strength |d^b_S|^2 for each exciton
+    # Compute oscillator strength |d^b_S|^2 for each exciton
     osc = {}
     for b_dir in ['x', 'y']:
         r_flat = r_b[b_dir].reshape(dim_bse)
-        d_S = A_coeff.conj().T @ r_flat  # (N_excitons,) complex
+        d_S = A_coeff.conj().T @ r_flat
         osc[b_dir] = np.abs(d_S)**2 / Nk
 
-    # 9. Select excitons in energy range
+    # Select excitons in energy range
     mask = (Omega_S >= E_range[0]) & (Omega_S <= E_range[1])
     idx = np.where(mask)[0][:n_show]
     E_sel = Omega_S[idx]
@@ -1888,15 +1722,13 @@ def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
 
     for b_dir in pol_list:
         osc_sel = osc[b_dir][idx]
-
-        # Print brightest excitons
         bright_order = np.argsort(osc_sel)[::-1]
         print(f"\n  Top 5 brightest excitons ({b_dir}-pol):")
         for rank, si in enumerate(bright_order[:5]):
             print(f"    #{rank+1}: E = {E_sel[si]:.4f} eV, "
                   f"|d^{b_dir}|² = {osc_sel[si]:.4e}")
 
-    # 10. Plot
+    # Plot
     if polarization == 'both':
         fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
         for ax, b_dir, color in zip(axes, ['x', 'y'], ['red', 'blue']):
@@ -1921,7 +1753,7 @@ def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
 
         axes[0].set_title(f'Exciton Oscillator Strength\n'
                           f'N={N_top}/{N_bottom}, twist={np.degrees(twist_angle):.0f}°, '
-                          f'κ={kappa}, r0={r0} Å, grid={n_k_bse}²')
+                          f'kappa={kappa}, r0={r0} A, grid={n_k_bse}²')
         axes[-1].set_xlabel('Exciton Energy (eV)')
     else:
         fig, ax = plt.subplots(figsize=(8, 5))
@@ -1947,7 +1779,7 @@ def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
         ax.set_ylabel(f'$|d^{b_dir}_S|^2$ (arb.)')
         ax.set_title(f'Exciton Oscillator Strength ({b_dir}-polarized)\n'
                      f'N={N_top}/{N_bottom}, twist={np.degrees(twist_angle):.0f}°, '
-                     f'κ={kappa}, r0={r0} Å, grid={n_k_bse}²')
+                     f'kappa={kappa}, r0={r0} A, grid={n_k_bse}²')
         ax.grid(True, alpha=0.3)
         ax.set_xlim(E_range)
 
@@ -2103,85 +1935,32 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
     print("Exciton Wavefunction Analysis")
     print("=" * 60)
 
-    # 1. Model & k-grid
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
 
-    kx = np.linspace(-k_range, k_range, n_k_bse)
-    ky = np.linspace(-k_range, k_range, n_k_bse)
-    dk = kx[1] - kx[0]
-    KX, KY = np.meshgrid(kx, ky)
-    k_points = np.column_stack([KX.flatten(), KY.flatten()])
-    Nk = len(k_points)
+    print(f"[1-2] Running BSE pipeline...")
+    pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
+                             thickness=thickness, kappa=kappa, r0=r0,
+                             band_window=band_window)
 
-    # 2. Single-particle solve
-    print(f"[1] Diagonalizing H for {Nk} k-points...")
-    H_stack = model.get_hamiltonians(k_points)
-    evals, evecs = np.linalg.eigh(H_stack)
-    Nb = evals.shape[1]
-
-    mid = Nb // 2
-    if band_window is not None:
-        v_idx = np.arange(band_window[0], band_window[1] + 1)
-        c_idx = np.arange(band_window[2], band_window[3] + 1)
-    else:
-        v_idx = np.arange(mid - n_val, mid)
-        c_idx = np.arange(mid, mid + n_cond)
-    Nv = len(v_idx)
-    Nc = len(c_idx)
-
-    # 3. Velocity for dipole matrix elements
-    vx_orb, vy_orb = model.get_velocity_matrices(k_points)
-    U = evecs
-    U_dag = np.conj(np.transpose(U, (0, 2, 1)))
-    vx_eig = U_dag @ vx_orb @ U
-    vy_eig = U_dag @ vy_orb @ U
-
-    E_v_arr = evals[:, v_idx]
-    E_c_arr = evals[:, c_idx]
-    dE = E_c_arr[:, None, :] - E_v_arr[:, :, None]
-
-    eps_denom = 1e-5
-    r_b = {}
-    for b_dir, v_b in [('x', vx_eig), ('y', vy_eig)]:
-        vb_cv = np.transpose(v_b[:, c_idx, :][:, :, v_idx], (0, 2, 1))
-        rb = np.zeros_like(vb_cv)
-        valid = np.abs(dE) > eps_denom
-        rb[valid] = vb_cv[valid] / (1j * dE[valid])
-        r_b[b_dir] = rb
-
-    # 4. BSE
-    a_lat = model.a_lat
-    b_lat = model.b_lat
-    A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
-
-    print(f"[2] Building & diagonalizing BSE...")
-    H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
-                                   kappa=kappa, r0=r0, N_top=N_top, N_bottom=N_bottom)
-    dim_bse_mat = H_bse.shape[0]
-    n_exciton_max = min(1000, dim_bse_mat - 2)
-    if dim_bse_mat > 10000:
-        print(f"    Using sparse eigsh (lowest {n_exciton_max} states)...")
-        Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
-        sort_idx = np.argsort(Omega_S)
-        Omega_S = Omega_S[sort_idx]
-        A_coeff = A_coeff[:, sort_idx]
-    else:
-        Omega_S, A_coeff = scipy_eigh(H_bse, driver='evd')
-    del H_bse
-    dim_bse = Nv * Nc * Nk
-
-    print(f"    Lowest exciton: {Omega_S[0]:.4f} eV")
-    print(f"    Binding energy: {np.min(dE) - Omega_S[0]:.4f} eV")
-
-    # 5. Resolve degenerate subspaces into x-bright / y-bright eigenstates
-    r_x_flat = r_b['x'].reshape(dim_bse)
-    r_y_flat = r_b['y'].reshape(dim_bse)
-
-    print(f"\n[3] Resolving degenerate exciton subspaces by polarization...")
-    A_coeff = _resolve_degenerate_excitons(Omega_S, A_coeff, r_x_flat, r_y_flat)
+    Nk = pipe['Nk']
+    Nb = pipe['Nb']
+    evals = pipe['evals']
+    evecs = pipe['evecs']
+    v_idx = pipe['v_idx']
+    c_idx = pipe['c_idx']
+    Nv, Nc = pipe['Nv'], pipe['Nc']
+    dE = pipe['dE']
+    r_b = pipe['r_b']
+    r_x_flat = pipe['r_x_flat']
+    r_y_flat = pipe['r_y_flat']
+    KX, KY = pipe['KX'], pipe['KY']
+    dk = pipe['dk']
+    Omega_S = pipe['Omega_S']
+    A_coeff = pipe['A_coeff']
+    dim_bse = pipe['dim_bse']
 
     # Recompute dipoles with rotated coefficients
-    d_x_all = A_coeff.conj().T @ r_x_flat  # (N_excitons,)
+    d_x_all = A_coeff.conj().T @ r_x_flat
     d_y_all = A_coeff.conj().T @ r_y_flat
     osc_x = np.abs(d_x_all)**2
     osc_y = np.abs(d_y_all)**2
@@ -2357,79 +2136,31 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
     for N_top, N_bottom in layer_pairs:
         print(f"\n--- Case N_top/N_bottom = {N_top}/{N_bottom} ---")
 
-        # 1. Model and k-grid
         model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
 
-        kx = np.linspace(-k_range, k_range, n_k_bse)
-        ky = np.linspace(-k_range, k_range, n_k_bse)
-        KX, KY = np.meshgrid(kx, ky)
-        k_points = np.column_stack([KX.flatten(), KY.flatten()])
-        Nk = len(k_points)
+        pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
+                                 thickness=thickness, kappa=kappa, r0=r0,
+                                 band_window=band_window)
 
-        # 2. Single-particle solve
-        H_stack = model.get_hamiltonians(k_points)
-        evals, evecs = np.linalg.eigh(H_stack)
-        Nb = evals.shape[1]
+        Nk = pipe['Nk']
+        Nb = pipe['Nb']
+        evecs = pipe['evecs']
+        v_idx = pipe['v_idx']
+        c_idx = pipe['c_idx']
+        Nv, Nc = pipe['Nv'], pipe['Nc']
+        U_dag = pipe['U_dag']
+        Omega_S = pipe['Omega_S']
+        A_coeff = pipe['A_coeff']
+        dim_bse = pipe['dim_bse']
+        r_x_flat = pipe['r_x_flat']
 
-        mid = Nb // 2
-        if band_window is not None:
-            v_idx = np.arange(band_window[0], band_window[1] + 1)
-            c_idx = np.arange(band_window[2], band_window[3] + 1)
-        else:
-            v_idx = np.arange(mid - n_val, mid)
-            c_idx = np.arange(mid, mid + n_cond)
-        Nv = len(v_idx)
-        Nc = len(c_idx)
-
-        # 3. Dipole matrix elements r^x/r^y in active space
-        vx_orb, vy_orb = model.get_velocity_matrices(k_points)
-        U = evecs
-        U_dag = np.conj(np.transpose(U, (0, 2, 1)))
-        vx_eig = U_dag @ vx_orb @ U
-        vy_eig = U_dag @ vy_orb @ U
-
-        E_v_arr = evals[:, v_idx]
-        E_c_arr = evals[:, c_idx]
-        dE = E_c_arr[:, None, :] - E_v_arr[:, :, None]  # (Nk, Nv, Nc)
-
-        eps_denom = 1e-5
-        r_b = {}
-        for b_dir, v_b in [('x', vx_eig), ('y', vy_eig)]:
-            vb_cv = np.transpose(v_b[:, c_idx, :][:, :, v_idx], (0, 2, 1))
-            rb = np.zeros_like(vb_cv)
-            valid = np.abs(dE) > eps_denom
-            rb[valid] = vb_cv[valid] / (1j * dE[valid])
-            r_b[b_dir] = rb
-
-        # 4. Build and diagonalize BSE
         a_lat = model.a_lat
         b_lat = model.b_lat
         A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
         V_uc = A_uc * thickness * (N_top + N_bottom)
 
-        H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
-                                      kappa=kappa, r0=r0,
-                                      N_top=N_top, N_bottom=N_bottom)
-        dim_bse_mat = H_bse.shape[0]
-        n_exciton_max = min(1000, dim_bse_mat - 2)
-        if dim_bse_mat > 10000:
-            Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
-            sort_idx = np.argsort(Omega_S)
-            Omega_S = Omega_S[sort_idx]
-            A_coeff = A_coeff[:, sort_idx]
-        else:
-            Omega_S, A_coeff = scipy_eigh(H_bse, driver='evd')
-        del H_bse
-
-        dim_bse = Nv * Nc * Nk
-        r_x_flat = r_b['x'].reshape(dim_bse)
-        r_y_flat = r_b['y'].reshape(dim_bse)
-
-        # Resolve degeneracy to x/y-polarized basis.
-        A_coeff = _resolve_degenerate_excitons(Omega_S, A_coeff, r_x_flat, r_y_flat)
-
         d_x_all = A_coeff.conj().T @ r_x_flat
-        d_y_all = A_coeff.conj().T @ r_y_flat
+        d_y_all = A_coeff.conj().T @ pipe['r_y_flat']
         osc_x = np.abs(d_x_all)**2
         osc_y = np.abs(d_y_all)**2
 
@@ -2474,14 +2205,8 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
         z_h = float(np.dot(rho_h, z_orb))
         dipole_z = z_e - z_h
 
-        # 6. zxx shift current from excitonic spectrum
-        z_eig = U_dag @ np.diag(z_orb) @ U
-        z_diag = np.real(np.diagonal(z_eig, axis1=1, axis2=2))
-        z_v = z_diag[:, v_idx]
-        z_c = z_diag[:, c_idx]
-        delta_z = z_v[:, :, None] - z_c[:, None, :]
-        delta_z_flat = delta_z.reshape(dim_bse)
-
+        # zxx shift current from excitonic spectrum (z-diagonal from pipeline)
+        delta_z_flat = pipe['delta_z'].reshape(dim_bse)
         g_xz_S = A_coeff.conj().T @ (delta_z_flat * r_x_flat)
         integrand_S = np.real(np.conj(d_x_all) * g_xz_S)
 
@@ -2590,103 +2315,23 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
                                       E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,):
     bright_level = []
     for N_bot in range(N_bottom[0], N_bottom[1]+1):
-        # 1. Model & k-grid
         model = TwistedBPModel(N_top=N_top, N_bottom=N_bot, twist_angle=twist_angle)
 
-        kx = np.linspace(-k_range, k_range, n_k_bse)
-        ky = np.linspace(-k_range, k_range, n_k_bse)
-        KX, KY = np.meshgrid(kx, ky)
-        k_points = np.column_stack([KX.flatten(), KY.flatten()])
-        Nk = len(k_points)
+        pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
+                                 thickness=None, kappa=kappa, r0=r0,
+                                 band_window=band_window)
 
-        # 2. Single-particle solve
-        print(f"\n[1] Diagonalizing H for {Nk} k-points...")
-        H_stack = model.get_hamiltonians(k_points)
-        evals, evecs = np.linalg.eigh(H_stack)
-        Nb = evals.shape[1]
+        Nk = pipe['Nk']
+        Omega_S = pipe['Omega_S']
+        A_coeff = pipe['A_coeff']
+        r_b = pipe['r_b']
+        dim_bse = pipe['dim_bse']
 
-        # 3. Select active bands
-        mid = Nb // 2
-        if band_window is not None:
-            v_idx = np.arange(band_window[0], band_window[1] + 1)
-            c_idx = np.arange(band_window[2], band_window[3] + 1)
-        else:
-            v_idx = np.arange(mid - n_val, mid)
-            c_idx = np.arange(mid, mid + n_cond)
-
-        Nv = len(v_idx)
-        Nc = len(c_idx)
-        print(f"  Bands: valence {v_idx}, conduction {c_idx}")
-        qp_gap = np.min(evals[:, c_idx[0]] - evals[:, v_idx[-1]])
-        print(f"  QP gap: {qp_gap:.4f} eV")
-
-        # 4. Velocity matrices in eigenbasis
-        print(f"\n[2] Computing velocity matrices...")
-        vx_orb, vy_orb = model.get_velocity_matrices(k_points)
-        U = evecs
-        U_dag = np.conj(np.transpose(U, (0, 2, 1)))
-
-        vx_eig = U_dag @ vx_orb @ U
-        vy_eig = U_dag @ vy_orb @ U
-
-        # 5. Interband position matrix elements r^b_{cv}(k)
-        E_v_arr = evals[:, v_idx]
-        E_c_arr = evals[:, c_idx]
-        dE = E_c_arr[:, None, :] - E_v_arr[:, :, None]  # (Nk, Nv, Nc)
-
-        eps_denom = 1e-5
-        v_eig_map = {'x': vx_eig, 'y': vy_eig}
-
-        r_b = {}
-        for b_dir in ['x', 'y']:
-            v_b = v_eig_map[b_dir]
-            vb_cv = v_b[:, c_idx, :][:, :, v_idx]
-            vb_cv = np.transpose(vb_cv, (0, 2, 1))  # (Nk, Nv, Nc)
-            rb = np.zeros_like(vb_cv)
-            valid = np.abs(dE) > eps_denom
-            rb[valid] = vb_cv[valid] / (1j * dE[valid])
-            r_b[b_dir] = rb
-
-        # 6. Build & diagonalize BSE Hamiltonian
-        a_lat = model.a_lat
-        b_lat = model.b_lat
-        A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
-
-        print(f"\n[3] Building BSE Hamiltonian...")
-        H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
-                                    kappa=kappa, r0=r0, N_top=N_top, N_bottom=N_bot)
-
-        print(f"\n[4] Diagonalizing BSE ({H_bse.shape[0]}x{H_bse.shape[0]})...")
-        import time
-        t0 = time.time()
-        dim_bse_mat = H_bse.shape[0]
-        n_exciton_max = min(1000, dim_bse_mat - 2)
-        if dim_bse_mat > 10000:
-            print(f"    Using sparse eigsh (lowest {n_exciton_max} states)...")
-            Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
-            sort_idx = np.argsort(Omega_S)
-            Omega_S = Omega_S[sort_idx]
-            A_coeff = A_coeff[:, sort_idx]
-        else:
-            Omega_S, A_coeff = scipy_eigh(H_bse, driver='evd')
-        dt = time.time() - t0
-        print(f"    Done in {dt:.1f} s")
-        print(f"    Exciton energies: {Omega_S[0]:.4f} - {Omega_S[-1]:.4f} eV")
-        print(f"    Binding energy: {qp_gap - Omega_S[0]:.4f} eV")
-
-        dim_bse = Nv * Nc * Nk
-
-        # 7. Resolve degenerate excitons into polarization eigenstates
-        r_b_x_flat = r_b['x'].reshape(dim_bse)
-        r_b_y_flat = r_b['y'].reshape(dim_bse)
-        A_coeff = _resolve_degenerate_excitons(Omega_S, A_coeff,
-                                                r_b_x_flat, r_b_y_flat)
-
-        # 8. Compute oscillator strength |d^b_S|^2 for each exciton
+        # Compute oscillator strength |d^b_S|^2 for each exciton
         osc = {}
         for b_dir in ['x', 'y']:
             r_flat = r_b[b_dir].reshape(dim_bse)
-            d_S = A_coeff.conj().T @ r_flat  # (N_excitons,) complex
+            d_S = A_coeff.conj().T @ r_flat
             osc[b_dir] = np.abs(d_S)**2 / Nk
 
         # 9. Select excitons in energy range
