@@ -3,13 +3,18 @@ from scipy.linalg import eigh as scipy_eigh
 from scipy.sparse.linalg import eigsh
 import time
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-mpl.rcParams['font.family'] = 'Arial'
+# import matplotlib as mpl
+# mpl.rcParams['font.family'] = 'Arial'
 
 try:
     import torch
 except ImportError:
     torch = None
+
+
+# ============================================================
+# Two-band model of twisted multilayer black phosphorus
+# ============================================================
 
 class TwistedBPModel:
     def __init__(self, 
@@ -42,7 +47,10 @@ class TwistedBPModel:
         self.twist_angle = twist_angle
 
         # effective interface coupling strength (in eV)
-        self.coupling = 0.095 # For 2+2/3+3, 0.095 is a good fit . For 4+4, 0.07 is a good fit.
+        if N_top == 4:
+            self.coupling = 0.07 # For 4+4, 0.07 is a good fit.
+        else:
+            self.coupling = 0.095 # For 2+2/3+3, 0.095 is a good fit.
 
         # tight-binding parameters
         self.a1 = 2.22
@@ -471,7 +479,7 @@ class TwistedBPModel:
         return results[0], results[1], results[2]
 
 # ============================================================
-# Standalone analysis functions
+# Single-particle part
 # ============================================================
 
 def cal_bands(N_top=4, N_bottom=4, twist_angle=0.0,
@@ -853,11 +861,11 @@ def calculate_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     # z-position operator: top layer +d/2, bottom layer -d/2
     dim_H = Nb
     z_op = np.zeros((dim_H, dim_H), dtype=np.float64)
-    z_op[0, 0] = +layerthickness * N_top / 2.0  # top conduction
-    z_op[1, 1] = +layerthickness * N_top / 2.0  # top valence
+    z_op[0, 0] = +layerthickness * N_top / 2.0  # top basis 0
+    z_op[1, 1] = +layerthickness * N_top / 2.0  # top basis 1
     if dim_H == 4:
-        z_op[2, 2] = -layerthickness * N_bottom / 2.0  # bottom conduction
-        z_op[3, 3] = -layerthickness * N_bottom / 2.0  # bottom valence
+        z_op[2, 2] = -layerthickness * N_bottom / 2.0  # bottom basis 0
+        z_op[3, 3] = -layerthickness * N_bottom / 2.0  # bottom basis 1
 
     # Transform: z_eig = U^dag @ z_op @ U  (Nk, Nb, Nb)
     z_eig = U_dag @ z_op @ U
@@ -2526,12 +2534,12 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
     plt.figure(figsize=(5, 5))
     plt.plot(level_list, X_bright, label='X-bright (analytic)', color='red', ls='--')
     plt.plot(level_list, Y_bright, label='Y-bright (analytic)', color='blue', ls='--')
-    plt.scatter(range(N_bottom[0], N_bottom[1]+1), bright_level[:, 0], label='X-bright (BSE)', color='red', marker='o')
     plt.scatter(range(N_bottom[0], N_bottom[1]+1), bright_level[:, 1], label='Y-bright (BSE)', color='blue', marker='s')
+    plt.scatter(range(N_bottom[0], N_bottom[1]+1), bright_level[:, 0], label='X-bright (BSE)', color='red', marker='o')
     # plt.tight_layout()
-    plt.ylim(0.2,1.6)
+    plt.ylim(0.0,1.0)
     plt.legend()
-    plt.xlabel('N_bottom')
+    plt.xlabel('$N_{bottom}$')
     plt.ylabel('Bright Exciton Energy (eV)')
     fname = f"EM_exciton_level.png"
     plt.savefig(fname, dpi=300)
@@ -2546,12 +2554,23 @@ if __name__ == "__main__":
     a_lat = 3.296
     G_moire = 2 * np.pi * np.abs(1/b_lat - 1/a_lat)
     n_top = 3
-    n_bottom = 3
+    n_bottom = n_top
     twist_angle = np.pi / 2
-    kappa=5.0
-    r0=6.0
+    kappa=4.0
+    r0=15.0
     # twist_angle = 0.0
-    erange = (0.0, 1.00)
+    if n_top == 3:
+        gamma_c = 0.58
+        gamma_v = -0.32
+        erange = (0.0, 1.00)
+    elif n_top == 2:
+        gamma_c = 0.49
+        gamma_v = -0.42
+        erange = (0.0, 1.20)
+    elif n_top == 4:
+        gamma_c = 0.57
+        gamma_v = -0.32
+        erange = (0.0, 0.80)
 
     # single k point test
     # --------------------------------------------
@@ -2590,33 +2609,33 @@ if __name__ == "__main__":
     #                         E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,)
 
 
-    # # # Shift Current Calculation
-    # # # --------------------------------------------   
-    # calculate_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle, 
-    #                         n_k=240, n_E=100,
-    #                         E_range=erange, k_range=G_moire/2,)
+    # # Shift Current Calculation
+    # # --------------------------------------------   
+    calculate_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle, 
+                            n_k=240, n_E=100,
+                            E_range=erange, k_range=G_moire/2,)
 
-    # # # Z-direction (out-of-plane) Shift Current
-    # # # --------------------------------------------
-    # calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                           n_k=240, n_E=250,
-    #                         #   band_window=[0,1,2,2],
-    #                           E_range=erange, k_range=G_moire/2)
-
-    # # BSE Excitonic Z-Shift Current
+    # # Z-direction (out-of-plane) Shift Current
     # # --------------------------------------------
-    calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                   n_k_bse=30, n_val=2, n_cond=2,
-                                   E_range=erange, k_range=G_moire/2,
-                                   kappa=kappa, r0=r0,
-                                   use_gpu="auto", gpu_dtype="complex64",
-                                   gpu_full_eigh_max_dim=16000,)
+    calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                              n_k=240, n_E=250,
+                            #   band_window=[0,1,2,2],
+                              E_range=erange, k_range=G_moire/2)
+
+    # # # BSE Excitonic Z-Shift Current
+    # # # --------------------------------------------
+    # calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                n_k_bse=50, n_val=2, n_cond=2,
+    #                                E_range=erange, k_range=G_moire/2,
+    #                                kappa=kappa, r0=r0,
+    #                                use_gpu="auto", gpu_dtype="complex64",
+    #                                gpu_full_eigh_max_dim=16000,)
 
     # # # Exciton Oscillator Strength (stem plot)
     # # # --------------------------------------------
     # plot_exciton_oscillator_strength(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
     #                                   E_range=erange, eta=0.010,
-    #                                   k_range=G_moire/2, n_k_bse=30,
+    #                                   k_range=G_moire/2, n_k_bse=50,
     #                                   n_val=2, n_cond=2,
     #                                   kappa=kappa, r0=r0,
     #                                   polarization='both')
@@ -2625,7 +2644,7 @@ if __name__ == "__main__":
     # # # --------------------------------------------
     # calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
     #                           E_range=erange, n_E=500, eta=0.010,
-    #                           k_range=G_moire/2, n_k_bse=30,
+    #                           k_range=G_moire/2, n_k_bse=50,
     #                           n_val=2, n_cond=2,
     #                           kappa=kappa, r0=r0,
     #                           plot_ipa_comparison=True,)
@@ -2634,21 +2653,21 @@ if __name__ == "__main__":
     # # # --------------------------------------------
     # analyze_exciton_wavefunction(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
     #                                 E_range=erange, eta=0.010,
-    #                                 k_range=G_moire/2, n_k_bse=30,
+    #                                 k_range=G_moire/2, n_k_bse=50,
     #                                 n_val=2, n_cond=2,
     #                                 thickness=5.2,
     #                                 kappa=kappa, r0=r0,
     #                                 n_excitons=4,
     #                                 )
 
-    # # Excitonic Levels
-    # # --------------------------------------------
-    # plot_exciton_level(N_top=n_top, N_bottom=[n_bottom,9], twist_angle=twist_angle,
+    # # # Excitonic Levels
+    # # # --------------------------------------------
+    # plot_exciton_level(N_top=n_top, N_bottom=[n_top,9], twist_angle=twist_angle,
     #                                   E_range=erange,
-    #                                   k_range=G_moire/2, n_k_bse=30,
+    #                                   k_range=G_moire/2, n_k_bse=50,
     #                                   n_val=2, n_cond=2,
     #                                   kappa=kappa, r0=r0,
-    #                                   E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,)
+    #                                   E_g=2.1, gamma_c = gamma_c, gamma_v = gamma_v,)
 
     # # Dipolar moment vs. Peak Shift
     # # --------------------------------------------
@@ -2656,7 +2675,7 @@ if __name__ == "__main__":
     #     layer_pairs=[(2, 2), (3, 3)],
     #     twist_angle=twist_angle,
     #     E_range=erange, n_E=500, eta=0.010,
-    #     k_range=G_moire/2, n_k_bse=30,
+    #     k_range=G_moire/2, n_k_bse=50,
     #     n_val=2, n_cond=2,
     #     thickness=5.2,
     #     kappa=kappa, r0=r0,
