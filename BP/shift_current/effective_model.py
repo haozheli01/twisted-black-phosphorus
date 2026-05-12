@@ -6,6 +6,11 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 mpl.rcParams['font.family'] = 'Arial'
 
+try:
+    import torch
+except ImportError:
+    torch = None
+
 class TwistedBPModel:
     def __init__(self, 
                  N_top=1, N_bottom=1, twist_angle=0.0):
@@ -1184,6 +1189,115 @@ def keldysh_potential(q, kappa=2.5, r0=5.0, N_top=1, N_bottom=1):
     return V
 
 
+def _torch_cuda_is_available():
+    return torch is not None and torch.cuda.is_available()
+
+
+def _resolve_bse_torch_settings(use_gpu="auto", gpu_dtype="complex64"):
+    """
+    Pick the BSE backend. 3060-class cards are much faster in complex64 than
+    complex128, while the CPU fallback keeps complex128 for numerical parity.
+    """
+    if use_gpu == "auto":
+        enabled = _torch_cuda_is_available()
+    else:
+        enabled = bool(use_gpu)
+
+    if not enabled:
+        return False, None, None, None
+    if torch is None:
+        print("  GPU requested but PyTorch is not installed; falling back to NumPy/SciPy CPU.")
+        return False, None, None, None
+    if not torch.cuda.is_available():
+        print("  GPU requested but CUDA is not available in this environment; falling back to NumPy/SciPy CPU.")
+        return False, None, None, None
+
+    dtype_name = str(gpu_dtype).lower()
+    if dtype_name in ("complex64", "c64", "float32"):
+        complex_dtype = torch.complex64
+        real_dtype = torch.float32
+    elif dtype_name in ("complex128", "c128", "float64"):
+        complex_dtype = torch.complex128
+        real_dtype = torch.float64
+    else:
+        raise ValueError("gpu_dtype must be 'complex64' or 'complex128'")
+
+    return True, torch.device("cuda"), complex_dtype, real_dtype
+
+
+def _keldysh_potential_torch(q, kappa=2.5, r0=5.0, N_top=1, N_bottom=1):
+    V = torch.zeros_like(q)
+    mask = q > 1e-12
+    V[mask] = 14.3996 * 2 * np.pi / (
+        kappa * (q[mask] * (1 + r0 * (N_top + N_bottom) * q[mask]))
+    )
+    return V
+
+
+def build_bse_hamiltonian_gpu(evals, evecs, k_points, v_idx, c_idx, A_uc,
+                              kappa=2.5, r0=5.0, N_top=1, N_bottom=1,
+                              device=None, complex_dtype=None, real_dtype=None):
+    """
+    CUDA implementation of the dense BSE matrix build.
+
+    The basis order is identical to the NumPy path: flat(k, v, c), so downstream
+    spectra and exciton analysis remain unchanged.
+    """
+    if device is None:
+        device = torch.device("cuda")
+    if complex_dtype is None:
+        complex_dtype = torch.complex64
+    if real_dtype is None:
+        real_dtype = torch.float32 if complex_dtype == torch.complex64 else torch.float64
+
+    Nk = len(k_points)
+    Nv = len(v_idx)
+    Nc = len(c_idx)
+    dim_bse = Nv * Nc * Nk
+
+    print(f"  Building BSE Hamiltonian on GPU: {Nv}v x {Nc}c x {Nk}k = {dim_bse} basis states")
+    print(f"    Dense matrix memory: {dim_bse**2 * torch.empty((), dtype=complex_dtype).element_size() / 1e9:.2f} GB")
+
+    evals_t = torch.as_tensor(evals, dtype=real_dtype, device=device)
+    evecs_t = torch.as_tensor(evecs, dtype=complex_dtype, device=device)
+    k_points_t = torch.as_tensor(k_points, dtype=real_dtype, device=device)
+    v_idx_t = torch.as_tensor(v_idx, dtype=torch.long, device=device)
+    c_idx_t = torch.as_tensor(c_idx, dtype=torch.long, device=device)
+
+    E_v = evals_t.index_select(1, v_idx_t)
+    E_c = evals_t.index_select(1, c_idx_t)
+    delta_E = E_c[:, None, :] - E_v[:, :, None]
+    diag_vals = delta_E.reshape(dim_bse)
+
+    H_bse = torch.diag(diag_vals).to(complex_dtype)
+
+    dk = k_points_t[:, None, :] - k_points_t[None, :, :]
+    q_mag = torch.linalg.vector_norm(dk, dim=2)
+    Vq = _keldysh_potential_torch(q_mag, kappa=kappa, r0=r0,
+                                  N_top=N_top, N_bottom=N_bottom) / (Nk * A_uc)
+
+    U_c = evecs_t.index_select(2, c_idx_t)
+    U_v = evecs_t.index_select(2, v_idx_t)
+
+    print(f"    Computing overlaps on GPU...")
+    overlap_cc = torch.einsum('kai,laj->klij', U_c.conj(), U_c)
+    overlap_vv = torch.einsum('lai,kaj->lkij', U_v.conj(), U_v)
+
+    print(f"    Assembling dense kernel on GPU...")
+    kernel = torch.einsum('kl,klij,lkpv->kvilpj', Vq, overlap_cc, overlap_vv)
+    H_bse -= kernel.reshape(dim_bse, dim_bse)
+    del kernel, overlap_cc, overlap_vv, Vq, dk, q_mag, U_c, U_v
+
+    H_bse = 0.5 * (H_bse + H_bse.conj().T)
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+        used = torch.cuda.max_memory_allocated(device) / 1e9
+        print(f"    CUDA peak allocated so far: {used:.2f} GB")
+
+    return H_bse
+
+
 def build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc, kappa=2.5, r0=5.0, N_top=1, N_bottom=1):
     """
     Build BSE Hamiltonian in the electron-hole product basis |v,c,k⟩.
@@ -1234,19 +1348,10 @@ def build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc, kappa=2.5,
     print(f"    Computing valence overlaps...")
     overlap_vv = np.einsum('lai,kaj->lkij', U_v.conj(), U_v)  # (Nk, Nk, Nv, Nv)
 
-    print(f"    Assembling kernel (vectorized over k-pairs)...")
-    for ik in range(Nk):
-        Vq_row = Vq[ik, :]
-        ov_cc = overlap_cc[ik, :, :, :]  # (Nk', Nc, Nc')
-        ov_vv = overlap_vv[:, ik, :, :]  # (Nk', Nv', Nv)
-
-        # kernel_full[v, c, k', v', c'] = Vq[k'] * ov_cc[k', c, c'] * ov_vv[k', v', v]
-        kernel_full = np.einsum('q,qij,qpv->viqpj', Vq_row, ov_cc, ov_vv)
-
-        row_start = ik * Nv * Nc
-        row_end = row_start + Nv * Nc
-        kernel_2d = kernel_full.reshape(Nv * Nc, Nk * Nv * Nc)
-        H_bse[row_start:row_end, :] -= kernel_2d
+    print(f"    Assembling dense kernel (single vectorized einsum)...")
+    kernel = np.einsum('kl,klij,lkpv->kvilpj', Vq, overlap_cc, overlap_vv, optimize=True)
+    H_bse -= kernel.reshape(dim_bse, dim_bse)
+    del kernel, overlap_cc, overlap_vv, Vq, dk, q_mag
 
     # Diagnostics
     n_nan = np.count_nonzero(np.isnan(H_bse))
@@ -1265,7 +1370,9 @@ def build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc, kappa=2.5,
 
 
 def _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
-                      thickness=None, kappa=2.5, r0=5.0, band_window=None):
+                      thickness=None, kappa=2.5, r0=5.0, band_window=None,
+                      use_gpu="auto", gpu_dtype="complex64",
+                      gpu_full_eigh_max_dim=16000):
     """
     Single-particle solve + BSE diagonalization + degenerate-subspace resolution.
 
@@ -1346,25 +1453,56 @@ def _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
 
     dim_bse = Nv * Nc * Nk
     print(f"  Building BSE Hamiltonian ({Nv}v x {Nc}c x {Nk}k = {dim_bse} basis)...")
-    H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
-                                   kappa=kappa, r0=r0,
-                                   N_top=model.N_top, N_bottom=model.N_bottom)
+    gpu_enabled, device, complex_dtype, real_dtype = _resolve_bse_torch_settings(use_gpu, gpu_dtype)
+    if gpu_enabled:
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
+            props = torch.cuda.get_device_properties(device)
+            print(f"  BSE backend: CUDA ({props.name}, {props.total_memory / 1e9:.1f} GB), dtype={complex_dtype}")
+        H_bse = build_bse_hamiltonian_gpu(
+            evals, evecs, k_points, v_idx, c_idx, A_uc,
+            kappa=kappa, r0=r0, N_top=model.N_top, N_bottom=model.N_bottom,
+            device=device, complex_dtype=complex_dtype, real_dtype=real_dtype,
+        )
+    else:
+        print("  BSE backend: NumPy/SciPy CPU")
+        H_bse = build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc,
+                                      kappa=kappa, r0=r0,
+                                      N_top=model.N_top, N_bottom=model.N_bottom)
 
     # 8. Diagonalize BSE
     dim_bse_mat = H_bse.shape[0]
     n_exciton_max = min(1000, dim_bse_mat - 2)
     print(f"  Diagonalizing BSE ({dim_bse_mat}x{dim_bse_mat})...")
     t0 = time.time()
-    if dim_bse_mat > 10000:
+    if gpu_enabled and dim_bse_mat <= gpu_full_eigh_max_dim:
+        print(f"    Using torch.linalg.eigh on CUDA (full dense spectrum)...")
+        Omega_t, A_t = torch.linalg.eigh(H_bse)
+        Omega_S = Omega_t.detach().cpu().numpy().astype(np.float64, copy=False)
+        A_coeff = A_t.detach().cpu().numpy().astype(np.complex128, copy=False)
+        del Omega_t, A_t, H_bse
+        torch.cuda.empty_cache()
+    elif gpu_enabled:
+        print(f"    Matrix is larger than gpu_full_eigh_max_dim={gpu_full_eigh_max_dim}; "
+              f"using CPU eigsh for lowest {n_exciton_max} states.")
+        H_bse = H_bse.detach().cpu().numpy().astype(np.complex128, copy=False)
+        torch.cuda.empty_cache()
+        Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
+        sort_idx = np.argsort(Omega_S)
+        Omega_S = Omega_S[sort_idx]
+        A_coeff = A_coeff[:, sort_idx]
+        del H_bse
+    elif dim_bse_mat > 10000:
         print(f"    Using sparse eigsh (lowest {n_exciton_max} states)...")
         Omega_S, A_coeff = eigsh(H_bse, k=n_exciton_max, which='SM')
         sort_idx = np.argsort(Omega_S)
         Omega_S = Omega_S[sort_idx]
         A_coeff = A_coeff[:, sort_idx]
+        del H_bse
     else:
         Omega_S, A_coeff = scipy_eigh(H_bse, driver='evd')
+        del H_bse
     dt = time.time() - t0
-    del H_bse
     print(f"    Done in {dt:.1f} s")
     print(f"    Exciton energy range: {Omega_S[0]:.4f} - {Omega_S[-1]:.4f} eV")
     print(f"    Lowest exciton: {Omega_S[0]:.4f} eV  (QP gap ~ {np.min(dE):.4f} eV)")
@@ -1393,7 +1531,9 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                                    thickness=5.2,
                                    kappa=2.5, r0=5.0,
                                    plot_ipa_comparison=True,
-                                   band_window=None, save_prefix=""):
+                                   band_window=None, save_prefix="",
+                                   use_gpu="auto", gpu_dtype="complex64",
+                                   gpu_full_eigh_max_dim=16000):
     r"""
     Excitonic z-shift current via the Bethe-Salpeter equation (BSE).
 
@@ -1436,7 +1576,9 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"\n[1-4] Running BSE pipeline...")
     pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
                              thickness=thickness, kappa=kappa, r0=r0,
-                             band_window=band_window)
+                             band_window=band_window, use_gpu=use_gpu,
+                             gpu_dtype=gpu_dtype,
+                             gpu_full_eigh_max_dim=gpu_full_eigh_max_dim)
 
     Nk = pipe['Nk']
     dE = pipe['dE']
@@ -1551,7 +1693,9 @@ def calculate_bse_absorbance(N_top=1, N_bottom=1, twist_angle=0.0,
                               n_val=2, n_cond=2,
                               kappa=2.5, r0=5.0,
                               plot_ipa_comparison=True,
-                              band_window=None, save_prefix=""):
+                              band_window=None, save_prefix="",
+                              use_gpu="auto", gpu_dtype="complex64",
+                              gpu_full_eigh_max_dim=16000):
     r"""
     BSE excitonic optical absorbance spectrum.
 
@@ -1586,7 +1730,9 @@ def calculate_bse_absorbance(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"\n[1-4] Running BSE pipeline...")
     pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
                              thickness=None, kappa=kappa, r0=r0,
-                             band_window=band_window)
+                             band_window=band_window, use_gpu=use_gpu,
+                             gpu_dtype=gpu_dtype,
+                             gpu_full_eigh_max_dim=gpu_full_eigh_max_dim)
 
     Nk = pipe['Nk']
     dE = pipe['dE']
@@ -1657,7 +1803,9 @@ def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
                                       polarization='x',
                                       n_show=100,
                                       plot_broadened=True,
-                                      band_window=None, save_prefix=""):
+                                      band_window=None, save_prefix="",
+                                      use_gpu="auto", gpu_dtype="complex64",
+                                      gpu_full_eigh_max_dim=16000):
     r"""
     Compute and plot exciton oscillator strength for a given light polarization.
 
@@ -1697,7 +1845,9 @@ def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"\n[1-4] Running BSE pipeline...")
     pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
                              thickness=None, kappa=kappa, r0=r0,
-                             band_window=band_window)
+                             band_window=band_window, use_gpu=use_gpu,
+                             gpu_dtype=gpu_dtype,
+                             gpu_full_eigh_max_dim=gpu_full_eigh_max_dim)
 
     Nk = pipe['Nk']
     Omega_S = pipe['Omega_S']
@@ -1910,7 +2060,9 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
                                   thickness=5.2,
                                   kappa=2.5, r0=5.0,
                                   n_excitons=4,
-                                  band_window=None, save_prefix=""):
+                                  band_window=None, save_prefix="",
+                                  use_gpu="auto", gpu_dtype="complex64",
+                                  gpu_full_eigh_max_dim=16000):
     r"""
     Analyze the composition and real-space envelope of the lowest bright excitons.
 
@@ -1940,7 +2092,9 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"[1-2] Running BSE pipeline...")
     pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
                              thickness=thickness, kappa=kappa, r0=r0,
-                             band_window=band_window)
+                             band_window=band_window, use_gpu=use_gpu,
+                             gpu_dtype=gpu_dtype,
+                             gpu_full_eigh_max_dim=gpu_full_eigh_max_dim)
 
     Nk = pipe['Nk']
     Nb = pipe['Nb']
@@ -2094,7 +2248,9 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
                                          n_val=2, n_cond=2,
                                          thickness=5.2,
                                          kappa=2.5, r0=5.0,
-                                         band_window=None, save_prefix=""):
+                                         band_window=None, save_prefix="",
+                                         use_gpu="auto", gpu_dtype="complex64",
+                                         gpu_full_eigh_max_dim=16000):
     r"""
     Scan different (N_top, N_bottom) stacks and correlate:
       1) dipole of the lowest-energy x-bright exciton
@@ -2140,7 +2296,9 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
 
         pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
                                  thickness=thickness, kappa=kappa, r0=r0,
-                                 band_window=band_window)
+                                 band_window=band_window, use_gpu=use_gpu,
+                                 gpu_dtype=gpu_dtype,
+                                 gpu_full_eigh_max_dim=gpu_full_eigh_max_dim)
 
         Nk = pipe['Nk']
         Nb = pipe['Nb']
@@ -2312,14 +2470,18 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
                                       n_val=2, n_cond=2,
                                       kappa=2.5, r0=5.0,
                                       band_window=None,
-                                      E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,):
+                                      E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,
+                                      use_gpu="auto", gpu_dtype="complex64",
+                                      gpu_full_eigh_max_dim=16000):
     bright_level = []
     for N_bot in range(N_bottom[0], N_bottom[1]+1):
         model = TwistedBPModel(N_top=N_top, N_bottom=N_bot, twist_angle=twist_angle)
 
         pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
                                  thickness=None, kappa=kappa, r0=r0,
-                                 band_window=band_window)
+                                 band_window=band_window, use_gpu=use_gpu,
+                                 gpu_dtype=gpu_dtype,
+                                 gpu_full_eigh_max_dim=gpu_full_eigh_max_dim)
 
         Nk = pipe['Nk']
         Omega_S = pipe['Omega_S']
@@ -2389,7 +2551,7 @@ if __name__ == "__main__":
     kappa=5.0
     r0=6.0
     # twist_angle = 0.0
-    erange = (0.0, 0.99)
+    erange = (0.0, 1.00)
 
     # single k point test
     # --------------------------------------------
@@ -2441,12 +2603,14 @@ if __name__ == "__main__":
     #                         #   band_window=[0,1,2,2],
     #                           E_range=erange, k_range=G_moire/2)
 
-    # # # BSE Excitonic Z-Shift Current
-    # # # --------------------------------------------
-    # calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                n_k_bse=30, n_val=2, n_cond=2,
-    #                                E_range=erange, k_range=G_moire/2,
-    #                                kappa=kappa, r0=r0,)
+    # # BSE Excitonic Z-Shift Current
+    # # --------------------------------------------
+    calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                                   n_k_bse=30, n_val=2, n_cond=2,
+                                   E_range=erange, k_range=G_moire/2,
+                                   kappa=kappa, r0=r0,
+                                   use_gpu="auto", gpu_dtype="complex64",
+                                   gpu_full_eigh_max_dim=16000,)
 
     # # # Exciton Oscillator Strength (stem plot)
     # # # --------------------------------------------
