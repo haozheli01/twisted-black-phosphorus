@@ -3,13 +3,20 @@ from scipy.linalg import eigh as scipy_eigh
 from scipy.sparse.linalg import eigsh
 import time
 import matplotlib.pyplot as plt
-# import matplotlib as mpl
-# mpl.rcParams['font.family'] = 'Arial'
+import matplotlib as mpl
+from matplotlib.collections import LineCollection
+mpl.rcParams['font.family'] = 'Arial'
 
 try:
     import torch
 except ImportError:
     torch = None
+
+
+def _save_dat(fname, data, header, fmt="%.10e"):
+    """Save numeric data next to the plotted figure for later replotting."""
+    np.savetxt(fname, data, header=header, fmt=fmt)
+    print(f"Saved data: {fname}")
 
 
 # ============================================================
@@ -561,6 +568,117 @@ def cal_bands(N_top=4, N_bottom=4, twist_angle=0.0,
     return model
 
 
+def plot_layer_projected_unfolded_bands(N_top=4, N_bottom=4, twist_angle=0.0,
+                                        k_fine_steps=360, y_lim=(-2, 1.5),
+                                        lw=2.5, save_prefix=""):
+    """
+    Plot unfolded bands colored by layer polarization.
+
+    The layer polarization is computed from the eigenvector weight in the
+    sublattice basis:
+
+        P_layer = W_top - W_bottom
+
+    with W_top = sum(|u_0|^2 + |u_1|^2) and
+    W_bottom = sum(|u_2|^2 + |u_3|^2). P_layer=+1 is top-layer polarized
+    and is plotted red; P_layer=-1 is bottom-layer polarized and is plotted
+    blue. Mixed states appear in the middle of the colormap.
+    """
+    if N_bottom == 0:
+        raise ValueError("Layer-projected bands require N_bottom > 0.")
+
+    model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom,
+                           twist_angle=twist_angle)
+
+    b_lat = model.b_lat
+    a_lat = model.a_lat
+    dg = 2 * np.pi * np.abs(1 / b_lat - 1 / a_lat)
+
+    n_seg = k_fine_steps // 2
+    path_1 = np.zeros((n_seg, 2))
+    path_1[:, 0] = np.linspace(-dg / 2, 0, n_seg, endpoint=False)
+    path_2 = np.zeros((n_seg + 1, 2))
+    path_2[:, 1] = np.linspace(0, dg / 2, n_seg + 1)
+    k_path = np.vstack([path_1, path_2])
+
+    dists = np.linalg.norm(np.diff(k_path, axis=0), axis=1)
+    k_dist = np.concatenate([[0], np.cumsum(dists)])
+    sym_pos = [0.0, k_dist[n_seg], k_dist[-1]]
+    sym_labels = [r'$X$', r'$\Gamma$', r'$Y$']
+
+    print(f"Calculating layer-projected unfolded bands ({len(k_path)} k-points)...")
+    H = model.get_hamiltonians(k_path)
+    evals, evecs = np.linalg.eigh(H)
+    nbnd = evals.shape[1]
+    vbm = np.max(evals[:, :nbnd // 2])
+    energies = evals - vbm
+
+    top_weight = np.sum(np.abs(evecs[:, 0:2, :])**2, axis=1)
+    bottom_weight = np.sum(np.abs(evecs[:, 2:4, :])**2, axis=1)
+    norm = top_weight + bottom_weight
+    layer_pol = np.zeros_like(top_weight)
+    valid = norm > 1e-14
+    layer_pol[valid] = (top_weight[valid] - bottom_weight[valid]) / norm[valid]
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    cmap = plt.get_cmap('bwr')
+    color_norm = mpl.colors.Normalize(vmin=-1.0, vmax=1.0)
+
+    for ib in range(nbnd):
+        points = np.column_stack([k_dist, energies[:, ib]])
+        segments = np.stack([points[:-1], points[1:]], axis=1)
+        seg_pol = 0.5 * (layer_pol[:-1, ib] + layer_pol[1:, ib])
+        lc = LineCollection(segments, cmap=cmap, norm=color_norm,
+                            linewidths=lw, alpha=0.9)
+        lc.set_array(seg_pol)
+        ax.add_collection(lc)
+
+    for pos in sym_pos:
+        ax.axvline(pos, c='gray', ls='-', lw=0.5)
+    ax.axhline(0, c='k', ls='--', lw=0.5, alpha=0.5)
+    ax.set_xticks(sym_pos)
+    ax.set_xticklabels(sym_labels)
+    ax.set_xlim(k_dist[0], k_dist[-1])
+    ax.set_ylim(y_lim)
+    ax.set_ylabel("Energy - VBM (eV)")
+    ax.set_title(f'Layer-Projected Unfolded Bands\n'
+                 f'N={N_top}/{N_bottom}, twist={np.degrees(twist_angle):.0f} deg')
+    ax.grid(True, alpha=0.3)
+
+    sm = mpl.cm.ScalarMappable(norm=color_norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, pad=0.02)
+    # cbar.set_label(r'Layer Polarization $P_\mathrm{layer}$', rotation=270, labelpad=15)
+    cbar.set_ticks([-1,1])
+    cbar.set_ticklabels(['Bottom','Top'])
+
+    plt.tight_layout()
+    suffix = f"N{N_top}_{N_bottom}_tw{np.degrees(twist_angle):.0f}{save_prefix}"
+    fname = f"EM_layer_projected_unfolded_{suffix}.png"
+    plt.savefig(fname, dpi=300)
+    plt.close()
+    print(f"Saved Layer-Projected Unfolded Bands: {fname}")
+
+    rows = []
+    for ik in range(len(k_path)):
+        for ib in range(nbnd):
+            rows.append([
+                ik, ib, k_dist[ik], k_path[ik, 0], k_path[ik, 1],
+                evals[ik, ib], energies[ik, ib],
+                top_weight[ik, ib], bottom_weight[ik, ib], layer_pol[ik, ib],
+            ])
+    _save_dat(
+        f"EM_layer_projected_unfolded_{suffix}.dat",
+        np.array(rows, dtype=float),
+        "k_index band_index k_dist kx ky energy_eV energy_minus_vbm_eV "
+        "top_weight bottom_weight layer_polarization",
+        fmt=["%d", "%d", "%.10e", "%.10e", "%.10e",
+             "%.10e", "%.10e", "%.10e", "%.10e", "%.10e"]
+    )
+
+    return k_dist, evals, top_weight, bottom_weight, layer_pol
+
+
 def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
                   sym_pos, sym_labels, k_boundary, y_lim, suffix="",
                   folded_is_structured=False):
@@ -583,6 +701,12 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
     plt.tight_layout()
     plt.savefig(f"EM_unfolded_{suffix}.png", dpi=200)
     plt.close()
+    unfolded_cols = [k_dist] + [unfolded_E[:, ib] - vbm for ib in range(nbnd)]
+    _save_dat(
+        f"EM_unfolded_{suffix}.dat",
+        np.column_stack(unfolded_cols),
+        "k_dist " + " ".join([f"E{ib}_minus_vbm_eV" for ib in range(nbnd)])
+    )
 
     # Folded plot
     if len(folded_k) > 0:
@@ -609,6 +733,16 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
         plt.tight_layout()
         plt.savefig(f"EM_folded_{suffix}.png", dpi=200)
         plt.close()
+        if folded_is_structured:
+            folded_cols = [folded_k] + [folded_E[:, ib] - vbm for ib in range(folded_E.shape[1])]
+            folded_header = "k_dist " + " ".join(
+                [f"E{ib}_minus_vbm_eV" for ib in range(folded_E.shape[1])]
+            )
+            folded_data = np.column_stack(folded_cols)
+        else:
+            folded_data = np.column_stack([folded_k, folded_E - vbm])
+            folded_header = "k_dist E_minus_vbm_eV"
+        _save_dat(f"EM_folded_{suffix}.dat", folded_data, folded_header)
 
     print(f"Figures saved with suffix {suffix}")
 
@@ -652,6 +786,13 @@ def plot_3d_bands(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"Saved 3D plot: {fname}")
+    band_indices = list(range(start_band, end_band))
+    band_cols = [evals[:, ib] for ib in band_indices]
+    _save_dat(
+        f"EM_3D{save_prefix}.dat",
+        np.column_stack([k_points[:, 0], k_points[:, 1]] + band_cols),
+        "kx ky " + " ".join([f"E_band{ib}_eV" for ib in band_indices])
+    )
 
 
 def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
@@ -742,6 +883,11 @@ def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"Saved Optical Absorption Spectrum: {fname}")
+    _save_dat(
+        f"EM_absorption{save_prefix}.dat",
+        np.column_stack([omegas, absorption_xx, absorption_yy, sigma_xx, sigma_yy]),
+        "omega_eV absorption_xx absorption_yy sigma_xx_raw sigma_yy_raw"
+    )
 
 
 def plot_transition_matrix_elements(N_top=1, N_bottom=1, twist_angle=0.0,
@@ -804,6 +950,11 @@ def plot_transition_matrix_elements(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"Saved Matrix Element Map: {fname}")
+    _save_dat(
+        f"EM_M_B{band_i}-{band_j}{save_prefix}.dat",
+        np.column_stack([k_points[:, 0], k_points[:, 1], np.abs(M_x)**2, np.abs(M_y)**2]),
+        "kx ky Mx_abs2 My_abs2"
+    )
 
 
 def calculate_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
@@ -964,6 +1115,15 @@ def calculate_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"Saved Z-Shift Current Figure: {fname}")
+    _save_dat(
+        f"EM_z_sc{save_prefix}.dat",
+        np.column_stack([
+            omegas,
+            results[('z', 'x', 'x')],
+            results[('z', 'y', 'y')],
+        ]),
+        "omega_eV sigma_zxx_uA_per_V2 sigma_zyy_uA_per_V2"
+    )
     return omegas, results
 
 
@@ -1128,6 +1288,18 @@ def calculate_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"Saved Shift Current Figure: {fname}")
+    _save_dat(
+        f"EM_sc{save_prefix}.dat",
+        np.column_stack([
+            omegas,
+            results[('x', 'x', 'x')],
+            results[('x', 'y', 'y')],
+            results[('y', 'x', 'x')],
+            results[('y', 'y', 'y')],
+        ]),
+        "omega_eV sigma_xxx_uA_A_per_V2 sigma_xyy_uA_A_per_V2 "
+        "sigma_yxx_uA_A_per_V2 sigma_yyy_uA_A_per_V2"
+    )
     return omegas, results
 
 
@@ -1167,6 +1339,16 @@ def plot_bandgap_scaling(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"\nSaved: {fname}")
+    _save_dat(
+        "gap_model.dat",
+        np.column_stack([np.arange(N_bottom[0], N_bottom[1]), gap_level]),
+        "N_bottom bandgap_eV"
+    )
+    _save_dat(
+        "gap_analytic.dat",
+        np.column_stack([level_list, X_bright, Y_bright]),
+        "N_bottom_continuous X_bright_eV Y_bright_eV"
+    )
 
 # =====================================================================
 #  Bethe-Salpeter Equation (BSE) — Excitonic Z-Shift Current
@@ -1380,7 +1562,7 @@ def build_bse_hamiltonian(evals, evecs, k_points, v_idx, c_idx, A_uc, kappa=2.5,
 def _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
                       thickness=None, kappa=2.5, r0=5.0, band_window=None,
                       use_gpu="auto", gpu_dtype="complex64",
-                      gpu_full_eigh_max_dim=16000):
+                      gpu_full_eigh_max_dim=32000):
     """
     Single-particle solve + BSE diagonalization + degenerate-subspace resolution.
 
@@ -1452,6 +1634,7 @@ def _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
         z_v = z_diag[:, v_idx]
         z_c = z_diag[:, c_idx]
         delta_z = z_v[:, :, None] - z_c[:, None, :]  # (Nk, Nv, Nc)
+        delta_z = delta_z * (-1)  # (f_nm = -1 for c->v)
 
     # 7. BSE Hamiltonian
     a_lat = model.a_lat
@@ -1541,7 +1724,7 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                                    plot_ipa_comparison=True,
                                    band_window=None, save_prefix="",
                                    use_gpu="auto", gpu_dtype="complex64",
-                                   gpu_full_eigh_max_dim=16000):
+                                   gpu_full_eigh_max_dim=32000):
     r"""
     Excitonic z-shift current via the Bethe-Salpeter equation (BSE).
 
@@ -1674,6 +1857,30 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"\nSaved BSE Z-Shift Current Figure: {fname}")
+    spec_cols = [
+        omegas,
+        results[('z', 'x', 'x')],
+        results[('z', 'y', 'y')],
+    ]
+    spec_header = [
+        "omega_eV",
+        "BSE_sigma_zxx_uA_per_V2",
+        "BSE_sigma_zyy_uA_per_V2",
+    ]
+    if ipa_results is not None:
+        spec_cols.extend([
+            ipa_results[('z', 'x', 'x')],
+            ipa_results[('z', 'y', 'y')],
+        ])
+        spec_header.extend([
+            "IPA_sigma_zxx_uA_per_V2",
+            "IPA_sigma_zyy_uA_per_V2",
+        ])
+    _save_dat(
+        f"EM_bse_z_sc{save_prefix}.dat",
+        np.column_stack(spec_cols),
+        " ".join(spec_header)
+    )
 
     # Exciton analysis plot
     osc_data = {}
@@ -1696,14 +1903,14 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
 
 
 def calculate_bse_absorbance(N_top=1, N_bottom=1, twist_angle=0.0,
-                              E_range=(0.0, 1.0), n_E=500, eta=0.010,
+                              E_range=(0.0, 1.0), n_E=500, eta=0.100,
                               k_range=0.15, n_k_bse=30,
                               n_val=2, n_cond=2,
                               kappa=2.5, r0=5.0,
                               plot_ipa_comparison=True,
                               band_window=None, save_prefix="",
                               use_gpu="auto", gpu_dtype="complex64",
-                              gpu_full_eigh_max_dim=16000):
+                              gpu_full_eigh_max_dim=32000):
     r"""
     BSE excitonic optical absorbance spectrum.
 
@@ -1799,6 +2006,16 @@ def calculate_bse_absorbance(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"\nSaved BSE Absorbance Figure: {fname}")
+    spec_cols = [omegas, abs_bse['x'], abs_bse['y']]
+    spec_header = ["omega_eV", "BSE_abs_x", "BSE_abs_y"]
+    if abs_ipa is not None:
+        spec_cols.extend([abs_ipa['x'], abs_ipa['y']])
+        spec_header.extend(["IPA_abs_x", "IPA_abs_y"])
+    _save_dat(
+        f"EM_bse_absorbance{save_prefix}.dat",
+        np.column_stack(spec_cols),
+        " ".join(spec_header)
+    )
 
     return omegas, abs_bse, Omega_S, A_coeff
 
@@ -1813,7 +2030,7 @@ def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
                                       plot_broadened=True,
                                       band_window=None, save_prefix="",
                                       use_gpu="auto", gpu_dtype="complex64",
-                                      gpu_full_eigh_max_dim=16000):
+                                      gpu_full_eigh_max_dim=32000):
     r"""
     Compute and plot exciton oscillator strength for a given light polarization.
 
@@ -1946,6 +2163,22 @@ def plot_exciton_oscillator_strength(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"\nSaved: {fname}")
+    _save_dat(
+        f"EM_exciton_osc_strength_{polarization}{save_prefix}.dat",
+        np.column_stack([Omega_S, osc['x'], osc['y']]),
+        "exciton_energy_eV osc_x_per_Nk osc_y_per_Nk"
+    )
+    if plot_broadened:
+        omegas_env = np.linspace(E_range[0], E_range[1], 500)
+        diff_env = omegas_env[:, None] - Omega_S[None, :]
+        lorentz_env = (1.0 / np.pi) * eta / (diff_env**2 + eta**2)
+        env_x = lorentz_env @ osc['x']
+        env_y = lorentz_env @ osc['y']
+        _save_dat(
+            f"EM_exciton_osc_strength_{polarization}_envelope{save_prefix}.dat",
+            np.column_stack([omegas_env, env_x, env_y]),
+            "omega_eV envelope_x envelope_y"
+        )
 
     return Omega_S, osc
 
@@ -2013,10 +2246,21 @@ def plot_exciton_analysis(Omega_S, osc_data, shift_weight_data, E_range=(0.0, 1.
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"Saved Exciton Analysis Figure: {fname}")
+    _save_dat(
+        f"EM_bse_exciton_analysis{save_prefix}.dat",
+        np.column_stack([
+            E_sel,
+            osc_data['x'][idx],
+            osc_data['y'][idx],
+            shift_weight_data['x'][idx],
+            shift_weight_data['y'][idx],
+        ]),
+        "exciton_energy_eV osc_x osc_y shift_weight_x shift_weight_y"
+    )
 
 
 def _resolve_degenerate_excitons(Omega_S, A_coeff, r_b_x_flat, r_b_y_flat,
-                                  degen_tol=1e-3):
+                                  degen_tol=1e-6):
     """
     Rotate degenerate exciton subspaces so that each state is an eigenstate
     of polarization (x-bright or y-bright), rather than an arbitrary mixture.
@@ -2070,7 +2314,7 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
                                   n_excitons=4,
                                   band_window=None, save_prefix="",
                                   use_gpu="auto", gpu_dtype="complex64",
-                                  gpu_full_eigh_max_dim=16000):
+                                  gpu_full_eigh_max_dim=32000):
     r"""
     Analyze the composition and real-space envelope of the lowest bright excitons.
 
@@ -2153,6 +2397,7 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
     n_show = len(bright_idx)
     fig, axes = plt.subplots(n_show, 3, figsize=(15, 4.2 * n_show),
                               squeeze=False)
+    weight_rows = []
 
     for row, si in enumerate(bright_idx):
         A_S = A_coeff[:, si]  # (dim_bse,)
@@ -2216,6 +2461,12 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
         rho_e_bot = rho_e[2] + rho_e[3] if Nb == 4 else 0.0
         rho_h_top = rho_h[0] + rho_h[1]
         rho_h_bot = rho_h[2] + rho_h[3] if Nb == 4 else 0.0
+        weight_rows.append(
+            [row, int(si), Omega_S[si], osc_x[si], osc_y[si],
+             1.0 if osc_x[si] > osc_y[si] else 0.0,
+             rho_e_top, rho_e_bot, rho_h_top, rho_h_bot]
+            + list(rho_e) + list(rho_h)
+        )
 
         ax = axes[row, 2]
         x_pos = np.arange(Nb)
@@ -2245,6 +2496,17 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
     plt.savefig(fname, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"\nSaved: {fname}")
+    orbital_headers = (
+        [f"rho_e_orb{i}" for i in range(Nb)]
+        + [f"rho_h_orb{i}" for i in range(Nb)]
+    )
+    _save_dat(
+        f"EM_exciton_wavefunction_weights{save_prefix}.dat",
+        np.array(weight_rows, dtype=float),
+        "rank exciton_index exciton_energy_eV osc_x osc_y pol_is_x "
+        "rho_e_top rho_e_bottom rho_h_top rho_h_bottom "
+        + " ".join(orbital_headers)
+    )
 
     return Omega_S, A_coeff, bright_idx
 
@@ -2258,7 +2520,7 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
                                          kappa=2.5, r0=5.0,
                                          band_window=None, save_prefix="",
                                          use_gpu="auto", gpu_dtype="complex64",
-                                         gpu_full_eigh_max_dim=16000):
+                                         gpu_full_eigh_max_dim=32000):
     r"""
     Scan different (N_top, N_bottom) stacks and correlate:
       1) dipole of the lowest-energy x-bright exciton
@@ -2468,6 +2730,141 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
               f"peak@{d['first_peak_energy']:.4f} eV")
     print(f"Saved: {fname_trend}")
     print(f"Saved: {fname_corr}")
+    _save_dat(
+        f"EM_xexciton_dipole_vs_shift_peak{save_prefix}.dat",
+        np.array([
+            [
+                d['N_top'], d['N_bottom'],
+                d['exciton_energy'], d['osc_x'],
+                d['dipole_z'], d['dipole_z_abs'],
+                d['rho_e_top'], d['rho_e_bottom'],
+                d['rho_h_top'], d['rho_h_bottom'],
+                d['first_peak_energy'],
+                d['first_peak_sigma_zxx'],
+                d['first_peak_sigma_zxx_abs'],
+            ]
+            for d in results
+        ], dtype=float),
+        "N_top N_bottom exciton_energy_eV osc_x dipole_z_A abs_dipole_z_A "
+        "rho_e_top rho_e_bottom rho_h_top rho_h_bottom first_peak_energy_eV "
+        "first_peak_sigma_zxx_uA_per_V2 abs_first_peak_sigma_zxx_uA_per_V2"
+    )
+
+    return results
+
+
+def test_lowest_exciton_binding_convergence(N_top=1, N_bottom=1, twist_angle=0.0,
+                                            n_k_bse_list=(12, 16, 20, 24, 30),
+                                            k_range=0.15,
+                                            n_val=2, n_cond=2,
+                                            kappa=2.5, r0=5.0,
+                                            band_window=None,
+                                            use_gpu="auto", gpu_dtype="complex64",
+                                            gpu_full_eigh_max_dim=32000,
+                                            save_prefix=""):
+    """
+    Test convergence of the lowest-energy exciton binding energy versus n_k_bse.
+
+    For each BSE k-grid, this computes
+
+        E_bind = min(E_c - E_v) - Omega_0
+
+    where Omega_0 is the lowest BSE exciton energy.
+
+    Parameters
+    ----------
+    n_k_bse_list : sequence of int
+        BSE k-grid sizes per direction. Each value uses an n_k_bse x n_k_bse grid.
+
+    Returns
+    -------
+    results : list of dict
+        One entry per grid, containing n_k_bse, Nk, dim_bse, qp_gap,
+        lowest_exciton_energy, binding_energy, and elapsed_time_s.
+    """
+    print("Lowest Exciton Binding Energy Convergence Test")
+    print(f"  Layers: N_top={N_top}, N_bottom={N_bottom}, twist={twist_angle:.4f} rad")
+    print(f"  k_range={k_range:.6f}  kappa={kappa}, r0={r0} A")
+    print(f"  BSE active space: n_val={n_val}, n_cond={n_cond}")
+    print(f"  n_k_bse list: {list(n_k_bse_list)}")
+
+    model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
+    results = []
+
+    for n_k in n_k_bse_list:
+        n_k = int(n_k)
+        print("\n" + "=" * 72)
+        print(f"Running n_k_bse={n_k} ({n_k}x{n_k} grid)")
+        t0 = time.time()
+
+        pipe = _run_bse_pipeline(model, k_range, n_k, n_val, n_cond,
+                                 thickness=None, kappa=kappa, r0=r0,
+                                 band_window=band_window,
+                                 use_gpu=use_gpu, gpu_dtype=gpu_dtype,
+                                 gpu_full_eigh_max_dim=gpu_full_eigh_max_dim)
+
+        elapsed = time.time() - t0
+        qp_gap = float(np.min(pipe['dE']))
+        lowest_exciton = float(pipe['Omega_S'][0])
+        binding_energy = qp_gap - lowest_exciton
+
+        row = {
+            'n_k_bse': n_k,
+            'Nk': int(pipe['Nk']),
+            'dim_bse': int(pipe['dim_bse']),
+            'qp_gap': qp_gap,
+            'lowest_exciton_energy': lowest_exciton,
+            'binding_energy': float(binding_energy),
+            'elapsed_time_s': float(elapsed),
+        }
+        results.append(row)
+
+        print(f"Result n_k_bse={n_k}:")
+        print(f"  QP gap                 = {qp_gap:.6f} eV")
+        print(f"  Lowest exciton energy  = {lowest_exciton:.6f} eV")
+        print(f"  Binding energy         = {binding_energy:.6f} eV")
+        print(f"  Elapsed time           = {elapsed:.1f} s")
+
+    n_k_arr = np.array([r['n_k_bse'] for r in results], dtype=int)
+    nk_arr = np.array([r['Nk'] for r in results], dtype=int)
+    dim_arr = np.array([r['dim_bse'] for r in results], dtype=int)
+    qp_gap_arr = np.array([r['qp_gap'] for r in results])
+    exciton_arr = np.array([r['lowest_exciton_energy'] for r in results])
+    binding_arr = np.array([r['binding_energy'] for r in results])
+    elapsed_arr = np.array([r['elapsed_time_s'] for r in results])
+
+    data = np.column_stack([
+        n_k_arr, nk_arr, dim_arr, qp_gap_arr, exciton_arr, binding_arr, elapsed_arr
+    ])
+    data_fname = f"EM_lowest_exciton_binding_convergence{save_prefix}.dat"
+    np.savetxt(data_fname, data,
+               header=("n_k_bse Nk dim_bse qp_gap_eV lowest_exciton_energy_eV "
+                       "binding_energy_eV elapsed_time_s"),
+               fmt=["%d", "%d", "%d", "%.10f", "%.10f", "%.10f", "%.4f"])
+
+    plt.figure(figsize=(6, 4))
+    plt.plot(n_k_arr, binding_arr, 'o-', color='tab:purple', lw=2,
+             label='Binding energy')
+    plt.xlabel(r'$n_{k,\mathrm{BSE}}$')
+    plt.ylabel('Lowest exciton binding energy (eV)')
+    plt.title(f'Lowest Exciton Binding Energy Convergence\n'
+              f'N={N_top}/{N_bottom}, grid=$n_k^2$, kappa={kappa}, r0={r0} A')
+    plt.grid(True, alpha=0.3)
+    plt.ylim(0.0, 0.040)
+    plt.legend()
+    plt.tight_layout()
+    fig_fname = f"EM_lowest_exciton_binding_convergence{save_prefix}.png"
+    plt.savefig(fig_fname, dpi=300)
+    plt.close()
+
+    print("\nConvergence summary:")
+    print("  n_k_bse    Nk    dim_BSE    QP_gap(eV)    Omega_0(eV)    E_bind(eV)")
+    for r in results:
+        print(f"  {r['n_k_bse']:7d} {r['Nk']:5d} {r['dim_bse']:10d} "
+              f"{r['qp_gap']:11.6f} {r['lowest_exciton_energy']:13.6f} "
+              f"{r['binding_energy']:12.6f}")
+    print(f"\nSaved data: {data_fname}")
+    print(f"Saved figure: {fig_fname}")
 
     return results
 
@@ -2480,7 +2877,7 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
                                       band_window=None,
                                       E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,
                                       use_gpu="auto", gpu_dtype="complex64",
-                                      gpu_full_eigh_max_dim=16000):
+                                      gpu_full_eigh_max_dim=32000):
     bright_level = []
     for N_bot in range(N_bottom[0], N_bottom[1]+1):
         model = TwistedBPModel(N_top=N_top, N_bottom=N_bot, twist_angle=twist_angle)
@@ -2545,6 +2942,20 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
     plt.savefig(fname, dpi=300)
     plt.close()
     print(f"\nSaved: {fname}")
+    _save_dat(
+        "EM_exciton_level_bse.dat",
+        np.column_stack([
+            np.arange(N_bottom[0], N_bottom[1] + 1),
+            bright_level[:, 0],
+            bright_level[:, 1],
+        ]),
+        "N_bottom X_bright_BSE_eV Y_bright_BSE_eV"
+    )
+    _save_dat(
+        "EM_exciton_level_analytic.dat",
+        np.column_stack([level_list, X_bright, Y_bright]),
+        "N_bottom_continuous X_bright_analytic_eV Y_bright_analytic_eV"
+    )
 
 
 if __name__ == "__main__":
@@ -2571,6 +2982,9 @@ if __name__ == "__main__":
         gamma_c = 0.57
         gamma_v = -0.32
         erange = (0.0, 0.80)
+    eta = 0.020
+    n_k_bse = 51
+    n_cond = 1
 
     # single k point test
     # --------------------------------------------
@@ -2585,16 +2999,23 @@ if __name__ == "__main__":
     # cal_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
     #           k_fine_steps=200, y_lim=(-0.5,1.0))
 
-    # # # 3D Band Structure
-    # # # --------------------------------------------
-    # # plot_3d_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    # #               k_range=G_moire/2, n_grid=60,
-    # #               view_elev=15, view_azim=45)
+    # # Layer-projected unfolded band structure
+    # # --------------------------------------------
+    # plot_layer_projected_unfolded_bands(
+    #     N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #     k_fine_steps=800, y_lim=(-0.5, 1.0)
+    # )
+
+    # # 3D Band Structure
+    # # --------------------------------------------
+    # plot_3d_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #               k_range=G_moire/2, n_grid=60,
+    #               view_elev=15, view_azim=45)
                   
     # # # Optical Conductivity
     # # # --------------------------------------------
     # calculate_optical_conductivity(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                n_k=240, n_E=500,eta=0.010,
+    #                                n_k=240, n_E=500,eta=eta,
     #                                k_range=G_moire/2, E_range=erange)
                                    
     # # # Matrix Element Map (VBM -> CBM)
@@ -2609,52 +3030,65 @@ if __name__ == "__main__":
     #                         E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,)
 
 
-    # # Shift Current Calculation
-    # # --------------------------------------------   
-    calculate_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle, 
-                            n_k=240, n_E=100,
-                            E_range=erange, k_range=G_moire/2,)
+    # # # Shift Current Calculation
+    # # # --------------------------------------------   
+    # calculate_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle, 
+    #                         n_k=240, n_E=100,eta=eta,
+    #                         E_range=erange, k_range=G_moire/2,)
 
-    # # Z-direction (out-of-plane) Shift Current
+    # # # Z-direction (out-of-plane) Shift Current
+    # # # --------------------------------------------
+    # calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                           n_k=240, n_E=250,eta=eta,
+    #                         #   band_window=[0,1,2,2],
+    #                           E_range=erange, k_range=G_moire/2)
+
+    # # Lowest exciton binding energy convergence versus n_k_bse
     # # --------------------------------------------
-    calculate_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                              n_k=240, n_E=250,
-                            #   band_window=[0,1,2,2],
-                              E_range=erange, k_range=G_moire/2)
+    # test_lowest_exciton_binding_convergence(
+    #     N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #     n_k_bse_list=[15, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70],
+    #     k_range=G_moire/2,
+    #     n_val=2, n_cond=n_cond,
+    #     kappa=kappa, r0=r0,
+    #     use_gpu="auto", gpu_dtype="complex64",
+    #     gpu_full_eigh_max_dim=32000,
+    #     save_prefix=f"_N{n_top}_{n_bottom}"
+    # )
 
     # # # BSE Excitonic Z-Shift Current
     # # # --------------------------------------------
     # calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                n_k_bse=50, n_val=2, n_cond=2,
+    #                                n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
     #                                E_range=erange, k_range=G_moire/2,
-    #                                kappa=kappa, r0=r0,
+    #                                kappa=kappa, r0=r0,eta=eta,
     #                                use_gpu="auto", gpu_dtype="complex64",
-    #                                gpu_full_eigh_max_dim=16000,)
+    #                                gpu_full_eigh_max_dim=32000,)
 
     # # # Exciton Oscillator Strength (stem plot)
     # # # --------------------------------------------
     # plot_exciton_oscillator_strength(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                   E_range=erange, eta=0.010,
-    #                                   k_range=G_moire/2, n_k_bse=50,
-    #                                   n_val=2, n_cond=2,
+    #                                   E_range=erange, eta=eta,
+    #                                   k_range=G_moire/2, n_k_bse=n_k_bse,
+    #                                   n_val=2, n_cond=n_cond,
     #                                   kappa=kappa, r0=r0,
     #                                   polarization='both')
 
     # # # BSE Excitonic Absorbance
     # # # --------------------------------------------
     # calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                           E_range=erange, n_E=500, eta=0.010,
-    #                           k_range=G_moire/2, n_k_bse=50,
-    #                           n_val=2, n_cond=2,
+    #                           E_range=erange, n_E=500, eta=eta,
+    #                           k_range=G_moire/2, n_k_bse=n_k_bse,
+    #                           n_val=2, n_cond=n_cond,
     #                           kappa=kappa, r0=r0,
     #                           plot_ipa_comparison=True,)
     
     # # # Excitonic Absorbance
     # # # --------------------------------------------
     # analyze_exciton_wavefunction(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                 E_range=erange, eta=0.010,
-    #                                 k_range=G_moire/2, n_k_bse=50,
-    #                                 n_val=2, n_cond=2,
+    #                                 E_range=erange, eta=eta,
+    #                                 k_range=G_moire/2, n_k_bse=n_k_bse,
+    #                                 n_val=2, n_cond=n_cond,
     #                                 thickness=5.2,
     #                                 kappa=kappa, r0=r0,
     #                                 n_excitons=4,
@@ -2664,8 +3098,8 @@ if __name__ == "__main__":
     # # # --------------------------------------------
     # plot_exciton_level(N_top=n_top, N_bottom=[n_top,9], twist_angle=twist_angle,
     #                                   E_range=erange,
-    #                                   k_range=G_moire/2, n_k_bse=50,
-    #                                   n_val=2, n_cond=2,
+    #                                   k_range=G_moire/2, n_k_bse=n_k_bse,
+    #                                   n_val=2, n_cond=n_cond,
     #                                   kappa=kappa, r0=r0,
     #                                   E_g=2.1, gamma_c = gamma_c, gamma_v = gamma_v,)
 
@@ -2674,9 +3108,9 @@ if __name__ == "__main__":
     # study_x_exciton_dipole_vs_shift_peak(
     #     layer_pairs=[(2, 2), (3, 3)],
     #     twist_angle=twist_angle,
-    #     E_range=erange, n_E=500, eta=0.010,
-    #     k_range=G_moire/2, n_k_bse=50,
-    #     n_val=2, n_cond=2,
+    #     E_range=erange, n_E=500,eta=eta,
+    #     k_range=G_moire/2, n_k_bse=n_k_bse,
+    #     n_val=2, n_cond=n_cond,
     #     thickness=5.2,
     #     kappa=kappa, r0=r0,
     #     save_prefix="_N2N3"
