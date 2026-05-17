@@ -1350,6 +1350,65 @@ def plot_bandgap_scaling(N_top=1, N_bottom=1, twist_angle=0.0,
         "N_bottom_continuous X_bright_eV Y_bright_eV"
     )
 
+
+def calculate_effective_mass(N_top=1, N_bottom=1, twist_angle=0.0, k_max=0.01, n_points=51):
+    """
+    Calculate effective masses by fitting a parabola E(k) = a k^2 + b k + c
+    in the range [-k_max, k_max] around the Gamma point.
+
+    Note: [Electron] m_x*:  0.2313 m_e, m_y*:  0.2313 m_e
+          [Hole]     m_x*:  0.6512 m_e, m_y*:  0.1400 m_e
+    """
+    model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
+    hbar2_over_me = 7.619964 # eV·Å^2
+
+    k_vals = np.linspace(-k_max, k_max, n_points)
+    
+    # x-direction: (k, 0)
+    k_points_x = np.column_stack([k_vals, np.zeros_like(k_vals)])
+    H_x = model.get_hamiltonians(k_points_x)
+    evals_x, _ = np.linalg.eigh(H_x)
+    
+    # y-direction: (0, k)
+    k_points_y = np.column_stack([np.zeros_like(k_vals), k_vals])
+    H_y = model.get_hamiltonians(k_points_y)
+    evals_y, _ = np.linalg.eigh(H_y)
+    
+    Nb = evals_x.shape[1]
+    idx_v = Nb // 2 - 2  # VBM
+    idx_c = Nb // 2      # CBM
+    
+    E_v_x = evals_x[:, idx_v]
+    E_c_x = evals_x[:, idx_c]
+    E_v_y = evals_y[:, idx_v]
+    E_c_y = evals_y[:, idx_c]
+    
+    # Fit parabola: a*x^2 + b*x + c
+    # The second derivative is 2*a
+    p_c_x = np.polyfit(k_vals, E_c_x, 2)
+    p_c_y = np.polyfit(k_vals, E_c_y, 2)
+    
+    # For valence band, curvature is negative, so we fit -E_v setting hole mass positive
+    p_v_x = np.polyfit(k_vals, -E_v_x, 2)
+    p_v_y = np.polyfit(k_vals, -E_v_y, 2)
+    
+    # m* = hbar^2 / (2a)
+    m_e_x = hbar2_over_me / (2 * p_c_x[0])
+    m_e_y = hbar2_over_me / (2 * p_c_y[0])
+    m_h_x = hbar2_over_me / (2 * p_v_x[0])
+    m_h_y = hbar2_over_me / (2 * p_v_y[0])
+    
+    print("="*60)
+    print(f"Effective Mass (N_top={N_top}, N_bottom={N_bottom}, twist={np.degrees(twist_angle):.1f}°)")
+    print(f"Fitting range: [-{k_max}, {k_max}] Å^-1 with {n_points} points.")
+    print("="*60)
+    print(f"[Electron] m_x*: {m_e_x:7.4f} m_e, m_y*: {m_e_y:7.4f} m_e")
+    print(f"[Hole]     m_x*: {m_h_x:7.4f} m_e, m_y*: {m_h_y:7.4f} m_e")
+    print("="*60)
+
+    return (m_e_x, m_e_y), (m_h_x, m_h_y)
+
+
 # =====================================================================
 #  Bethe-Salpeter Equation (BSE) — Excitonic Z-Shift Current
 # =====================================================================
@@ -1799,6 +1858,8 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
         d_b_S = A_coeff.conj().T @ r_b_flat
         g_bz_S = A_coeff.conj().T @ (delta_z_flat * r_b_flat)
         integrand_S = np.real(np.conj(d_b_S) * g_bz_S)
+        
+        print(f"    Lowest exciton optical dipole |d^{b_dir}_0|: {np.abs(d_b_S[0]):.6e}")
 
         bse_sum = np.sum(integrand_S)
         ipa_sum = np.sum(np.real(delta_z_flat * np.abs(r_b_flat)**2))
@@ -2359,6 +2420,7 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
     r_b = pipe['r_b']
     r_x_flat = pipe['r_x_flat']
     r_y_flat = pipe['r_y_flat']
+    delta_z = pipe['delta_z']  # (Nk, Nv, Nc)
     KX, KY = pipe['KX'], pipe['KY']
     dk = pipe['dk']
     Omega_S = pipe['Omega_S']
@@ -2419,22 +2481,37 @@ def analyze_exciton_wavefunction(N_top=1, N_bottom=1, twist_angle=0.0,
                      r'$\sum_{vc}|A^S_{vck}|^2$')
         ax.set_aspect('equal')
 
-        # --- Column 1: Real-space envelope |Φ(r)|² ---
-        psi_r_sq = np.zeros((n_k_bse, n_k_bse))
-        for iv in range(Nv):
-            for ic in range(Nc):
-                phi_k = A_4d[:, :, iv, ic]
-                phi_r = np.fft.fftshift(np.fft.fft2(phi_k))
-                psi_r_sq += np.abs(phi_r)**2
-        psi_r_sq /= np.max(psi_r_sq)
+        # --- Column 1: Real-space envelope |Φ(r)|² / Shift Vector ---
+        # psi_r_sq = np.zeros((n_k_bse, n_k_bse))
+        # for iv in range(Nv):
+        #     for ic in range(Nc):
+        #         phi_k = A_4d[:, :, iv, ic]
+        #         phi_r = np.fft.fftshift(np.fft.fft2(phi_k))
+        #         psi_r_sq += np.abs(phi_r)**2
+        # psi_r_sq /= np.max(psi_r_sq)
+
+        # ax = axes[row, 1]
+        # im = ax.pcolormesh(RX, RY, psi_r_sq, cmap='inferno', shading='auto')
+        # fig.colorbar(im, ax=ax, shrink=0.8)
+        # ax.set_xlabel(r'$\Delta x$ (Å)')
+        # ax.set_ylabel(r'$\Delta y$ (Å)')
+        # ax.set_title(f'S{row} ({pol}): Real-space envelope\n'
+        #              r'$|\Phi^S(\mathbf{r}_e - \mathbf{r}_h)|^2$')
+        # ax.set_aspect('equal')
+        
+        # New Column 1: Shift Vector in k-space
+        # delta_z = z_c - z_v. Shift vector is -z_c + z_v = -delta_z
+        # We weight it by the exciton coefficients |A^S_{vck}|^2
+        shift_vector_k = np.sum(np.abs(A_3d)**2 * (-delta_z), axis=(1, 2))  # (Nk,)
+        shift_vector_k = shift_vector_k.reshape(n_k_bse, n_k_bse)
 
         ax = axes[row, 1]
-        im = ax.pcolormesh(RX, RY, psi_r_sq, cmap='inferno', shading='auto')
+        im = ax.pcolormesh(KX, KY, shift_vector_k, cmap='coolwarm', shading='auto')
         fig.colorbar(im, ax=ax, shrink=0.8)
-        ax.set_xlabel(r'$\Delta x$ (Å)')
-        ax.set_ylabel(r'$\Delta y$ (Å)')
-        ax.set_title(f'S{row} ({pol}): Real-space envelope\n'
-                     r'$|\Phi^S(\mathbf{r}_e - \mathbf{r}_h)|^2$')
+        ax.set_xlabel(r'$k_x$ (Å$^{-1}$)')
+        ax.set_ylabel(r'$k_y$ (Å$^{-1}$)')
+        ax.set_title(f'S{row} ({pol}): Shift Vector\n'
+                     r'$\sum_{vc}|A^S_{vck}|^2 (-\langle u_c|z|u_c\rangle + \langle u_v|z|u_v\rangle)$')
         ax.set_aspect('equal')
 
         # --- Column 2: Layer-resolved electron & hole density ---
@@ -2999,19 +3076,16 @@ if __name__ == "__main__":
     # cal_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
     #           k_fine_steps=200, y_lim=(-0.5,1.0))
 
-    # # Layer-projected unfolded band structure
-    # # --------------------------------------------
-    # plot_layer_projected_unfolded_bands(
-    #     N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #     k_fine_steps=800, y_lim=(-0.5, 1.0)
-    # )
+    # # # 3D Band Structure
+    # # # --------------------------------------------
+    # # plot_3d_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    # #               k_range=G_moire/2, n_grid=60,
+    # #               view_elev=15, view_azim=45)
+    
+    # # # Effective Mass
+    # # # --------------------------------------------
+    # calculate_effective_mass(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle)
 
-    # # 3D Band Structure
-    # # --------------------------------------------
-    # plot_3d_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #               k_range=G_moire/2, n_grid=60,
-    #               view_elev=15, view_azim=45)
-                  
     # # # Optical Conductivity
     # # # --------------------------------------------
     # calculate_optical_conductivity(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
