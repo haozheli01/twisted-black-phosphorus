@@ -1786,14 +1786,16 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                                    gpu_full_eigh_max_dim=32000):
     r"""
     Excitonic z-shift current via the Bethe-Salpeter equation (BSE).
+    Ref: Lai, M., Xuan, F. & Quek, S. Y. arXiv:2402.02002
 
     Solves the BSE to obtain exciton wavefunctions, then computes:
 
-        sigma^{z;bb}(ω) = C * Σ_S Re[d^{b*}_S * g^{bz}_S] * δ(Ω_S - ω)
+        sigma^{z;bb}(ω) = C * Σ_S R^z_{S0} * |d^b_S|^2 * δ(Ω_S - ω)
 
     where:
         d^b_S = Σ_{vck} A^S_{vck} r^b_{cv}(k)    (exciton optical dipole)
-        g^{bz}_S = Σ_{vck} A^S_{vck} Δz(vck) r^b_{cv}(k)  (z-weighted dipole)
+        R^z_{S0} = Σ_{vck} |A^S_{vck}|^2 Δz(vck)  (Many-body shift vector)
+        Integrand = R^z_{S0} * |d^b_S|^2
 
     Parameters
     ----------
@@ -1856,15 +1858,17 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
         r_b_flat = r_b[b_dir].reshape(dim_bse)
 
         d_b_S = A_coeff.conj().T @ r_b_flat
-        g_bz_S = A_coeff.conj().T @ (delta_z_flat * r_b_flat)
-        integrand_S = np.real(np.conj(d_b_S) * g_bz_S)
+        
+        # R^z_{S0}: Many-body shift vector
+        R_z_S0 = np.sum(np.abs(A_coeff)**2 * delta_z_flat[:, None], axis=0)
+        integrand_S = R_z_S0 * np.abs(d_b_S)**2
         
         print(f"    Lowest exciton optical dipole |d^{b_dir}_0|: {np.abs(d_b_S[0]):.6e}")
 
         bse_sum = np.sum(integrand_S)
         ipa_sum = np.sum(np.real(delta_z_flat * np.abs(r_b_flat)**2))
-        print(f"    F-sum check {a_dir}{b_dir}{c_dir}: BSE={bse_sum:.6e}, IPA={ipa_sum:.6e}, "
-                f"ratio={bse_sum/ipa_sum:.6f}")
+        print(f"    Shift weight sum check {a_dir}{b_dir}{c_dir}: BSE={bse_sum:.6e}, IPA={ipa_sum:.6e}, "
+                f"enhancement ratio={bse_sum/ipa_sum:.6f}")
 
         diff = omegas[:, None] - Omega_S[None, :]
         lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
@@ -1946,14 +1950,13 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
     # Exciton analysis plot
     osc_data = {}
     shift_weight_data = {}
-    delta_z_flat = delta_z.reshape(dim_bse)
     for comp in comp_list:
         b_dir = comp[1]
         r_b_flat = r_b[b_dir].reshape(dim_bse)
         d_b_S = A_coeff.conj().T @ r_b_flat
-        g_bz_S = A_coeff.conj().T @ (delta_z_flat * r_b_flat)
+        R_z_S0 = np.sum(np.abs(A_coeff)**2 * delta_z_flat[:, None], axis=0)
         osc_data[b_dir] = np.abs(d_b_S)**2
-        shift_weight_data[b_dir] = np.real(np.conj(d_b_S) * g_bz_S)
+        shift_weight_data[b_dir] = R_z_S0 * np.abs(d_b_S)**2
 
     plot_exciton_analysis(Omega_S, osc_data, shift_weight_data, E_range=E_range,
                           N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle,
@@ -2321,15 +2324,19 @@ def plot_exciton_analysis(Omega_S, osc_data, shift_weight_data, E_range=(0.0, 1.
 
 
 def _resolve_degenerate_excitons(Omega_S, A_coeff, r_b_x_flat, r_b_y_flat,
-                                  degen_tol=1e-6):
+                                  degen_tol=1e-5):
     """
     Rotate degenerate exciton subspaces so that each state is an eigenstate
     of polarization (x-bright or y-bright), rather than an arbitrary mixture.
 
-    Within each degenerate multiplet, diagonalizes the x-polarization
-    oscillator-strength matrix  D^x_{ij} = d^x_i (d^x_j)*  to find the
-    linear combination that maximally couples to x-polarized light.
-    The orthogonal complement then couples to y.
+    Two-step procedure within each degenerate multiplet:
+      1. Diagonalize D^x = d_x d_x^H to isolate the x-bright direction.
+      2. Within the x-dark subspace, diagonalize D^y to resolve y-bright states.
+
+    After rotation (for deg >= 2):
+      - Largest  x-oscillator state is last (index j-1).
+      - Largest  y-oscillator state is next-to-last (index j-2) and x-dark.
+      - Remaining states are both x-dark and y-dark (when deg > 2).
 
     Parameters
     ----------
@@ -2341,26 +2348,29 @@ def _resolve_degenerate_excitons(Omega_S, A_coeff, r_b_x_flat, r_b_y_flat,
     A_coeff_rot : ndarray
         Rotated BSE eigenvectors (same shape as A_coeff).
     """
-    dim_bse = A_coeff.shape[0]
     A_rot = A_coeff.copy()
 
-    # Group into degenerate multiplets
     i = 0
     while i < len(Omega_S):
         j = i + 1
         while j < len(Omega_S) and abs(Omega_S[j] - Omega_S[i]) < degen_tol:
             j += 1
-        deg = j - i  # multiplicity
+        deg = j - i
         if deg > 1:
-            idx = slice(i, j)
-            # x-dipoles within this multiplet: d^x_m = A[:,m]^dagger @ r_x
-            d_x = A_rot[:, idx].conj().T @ r_b_x_flat  # (deg,) complex
-            # Oscillator strength matrix for x-pol: D_ij = d_i d_j*
-            D_x = np.outer(d_x, d_x.conj())  # (deg, deg)
-            # Diagonalize — eigenstates are the polarization-resolved excitons
-            _, U_rot = np.linalg.eigh(D_x)
-            # Rotate BSE coefficients: new = old @ U_rot
-            A_rot[:, idx] = A_rot[:, idx] @ U_rot
+            # Step 1: diagonalize D^x to separate x-bright from x-dark
+            A_sub = A_rot[:, i:j]  # (dim_bse, deg)
+            d_x = A_sub.conj().T @ r_b_x_flat  # (deg,)
+            _, U_x = np.linalg.eigh(np.outer(d_x, d_x.conj()))
+            # eigh returns ascending: [0, ..., 0, |d_x|^2]
+            A_sub = A_sub @ U_x
+            A_rot[:, i:j] = A_sub
+
+            # Step 2: within x-dark subspace, resolve y-bright states
+            n_x_dark = deg - 1
+            if n_x_dark > 1:
+                d_y_dark = A_sub[:, :n_x_dark].conj().T @ r_b_y_flat  # (n_x_dark,)
+                _, U_y = np.linalg.eigh(np.outer(d_y_dark, d_y_dark.conj()))
+                A_rot[:, i:i + n_x_dark] = A_sub[:, :n_x_dark] @ U_y
         i = j
 
     return A_rot
@@ -2710,10 +2720,10 @@ def study_x_exciton_dipole_vs_shift_peak(layer_pairs=None, N_layers=(2, 3),
         z_h = float(np.dot(rho_h, z_orb))
         dipole_z = z_e - z_h
 
-        # zxx shift current from excitonic spectrum (z-diagonal from pipeline)
+        # zxx shift current from excitonic spectrum (many-body shift vector × |d|²)
         delta_z_flat = pipe['delta_z'].reshape(dim_bse)
-        g_xz_S = A_coeff.conj().T @ (delta_z_flat * r_x_flat)
-        integrand_S = np.real(np.conj(d_x_all) * g_xz_S)
+        R_z_S0 = np.sum(np.abs(A_coeff)**2 * delta_z_flat[:, None], axis=0)
+        integrand_S = R_z_S0 * np.abs(d_x_all)**2
 
         omegas = np.linspace(E_range[0], E_range[1], n_E)
         diff = omegas[:, None] - Omega_S[None, :]
@@ -3130,14 +3140,14 @@ if __name__ == "__main__":
     #     save_prefix=f"_N{n_top}_{n_bottom}"
     # )
 
-    # # # BSE Excitonic Z-Shift Current
-    # # # --------------------------------------------
-    # calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                                n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
-    #                                E_range=erange, k_range=G_moire/2,
-    #                                kappa=kappa, r0=r0,eta=eta,
-    #                                use_gpu="auto", gpu_dtype="complex64",
-    #                                gpu_full_eigh_max_dim=32000,)
+    # # BSE Excitonic Z-Shift Current
+    # # --------------------------------------------
+    calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                                   n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
+                                   E_range=erange, k_range=G_moire/2,
+                                   kappa=kappa, r0=r0,eta=eta,
+                                   use_gpu="auto", gpu_dtype="complex64",
+                                   gpu_full_eigh_max_dim=32000,)
 
     # # # Exciton Oscillator Strength (stem plot)
     # # # --------------------------------------------
@@ -3148,14 +3158,14 @@ if __name__ == "__main__":
     #                                   kappa=kappa, r0=r0,
     #                                   polarization='both')
 
-    # # # BSE Excitonic Absorbance
-    # # # --------------------------------------------
-    # calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-    #                           E_range=erange, n_E=500, eta=eta,
-    #                           k_range=G_moire/2, n_k_bse=n_k_bse,
-    #                           n_val=2, n_cond=n_cond,
-    #                           kappa=kappa, r0=r0,
-    #                           plot_ipa_comparison=True,)
+    # # BSE Excitonic Absorbance
+    # # --------------------------------------------
+    calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                              E_range=erange, n_E=500, eta=eta,
+                              k_range=G_moire/2, n_k_bse=n_k_bse,
+                              n_val=2, n_cond=n_cond,
+                              kappa=kappa, r0=r0,
+                              plot_ipa_comparison=True,)
     
     # # # Excitonic Absorbance
     # # # --------------------------------------------
