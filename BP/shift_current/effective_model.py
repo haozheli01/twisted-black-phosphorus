@@ -19,6 +19,84 @@ def _save_dat(fname, data, header, fmt="%.10e"):
     print(f"Saved data: {fname}")
 
 
+def kramers_kronig_eps1_from_eps2(omega, eps2, eps_inf=1.0):
+    r"""
+    Compute the real dielectric function from epsilon_2 by the KK relation.
+
+        epsilon_1(omega) = eps_inf + 2/pi * P int_0^inf
+            Omega * epsilon_2(Omega) / (Omega^2 - omega^2) dOmega
+
+    The integral is evaluated on the provided positive-energy grid using
+    trapezoidal weights. The singular grid point is omitted as the numerical
+    principal-value prescription.
+    """
+    omega = np.asarray(omega, dtype=np.float64)
+    eps2 = np.asarray(eps2, dtype=np.float64)
+
+    if omega.ndim != 1 or eps2.ndim != 1:
+        raise ValueError("omega and eps2 must be one-dimensional arrays.")
+    if omega.shape != eps2.shape:
+        raise ValueError("omega and eps2 must have the same shape.")
+    if len(omega) < 2:
+        raise ValueError("At least two omega points are required for KK transform.")
+    if np.any(np.diff(omega) <= 0.0):
+        raise ValueError("omega grid must be strictly increasing.")
+    if omega[0] < 0.0:
+        raise ValueError("omega grid must be non-negative.")
+
+    weights = np.empty_like(omega)
+    weights[0] = 0.5 * (omega[1] - omega[0])
+    weights[-1] = 0.5 * (omega[-1] - omega[-2])
+    if len(omega) > 2:
+        weights[1:-1] = 0.5 * (omega[2:] - omega[:-2])
+
+    denom = omega[None, :]**2 - omega[:, None]**2
+    numer = weights[None, :] * omega[None, :] * eps2[None, :]
+    mask = ~np.isclose(denom, 0.0, rtol=0.0, atol=1e-14)
+    integrand = np.zeros_like(denom)
+    np.divide(numer, denom, out=integrand, where=mask)
+    return eps_inf + (2.0 / np.pi) * np.sum(integrand, axis=1)
+
+
+def dielectric_to_refractive_index(eps1, eps2):
+    """Return n and kappa from epsilon = eps1 + i eps2."""
+    eps_abs = np.sqrt(eps1**2 + eps2**2)
+    n = np.sqrt(np.maximum((eps_abs + eps1) / 2.0, 0.0))
+    kappa = np.sqrt(np.maximum((eps_abs - eps1) / 2.0, 0.0))
+    return n, kappa
+
+
+def normal_incidence_reflectivity(eps1, eps2):
+    """Reflectivity for vacuum -> material at normal incidence."""
+    n, kappa = dielectric_to_refractive_index(eps1, eps2)
+    return ((n - 1.0)**2 + kappa**2) / ((n + 1.0)**2 + kappa**2)
+
+
+def shift_conductivity_to_current(sigma_uA_per_V2, reflectivity,
+                                  total_thickness_A, sample_width_um,
+                                  intensity_W_cm2=1.6e4):
+    r"""
+    Convert shift-current conductivity to measured current.
+
+        I = (1 - R) * sigma * 2 * I_light * d * w / (epsilon0 * c)
+
+    Parameters use convenient lab units:
+    sigma in microampere/V^2, thickness in Angstrom, width in micron, and
+    optical intensity in W/cm^2. The returned current is in ampere.
+    """
+    eps0 = 8.8541878128e-12
+    c_light = 2.99792458e8
+
+    sigma_A_per_V2 = np.asarray(sigma_uA_per_V2, dtype=np.float64) * 1.0e-6
+    reflectivity = np.asarray(reflectivity, dtype=np.float64)
+    intensity_W_m2 = intensity_W_cm2 * 1.0e4
+    total_thickness_m = total_thickness_A * 1.0e-10
+    sample_width_m = sample_width_um * 1.0e-6
+
+    field_sq = (1.0 - reflectivity) * 2.0 * intensity_W_m2 / (eps0 * c_light)
+    return sigma_A_per_V2 * field_sq * total_thickness_m * sample_width_m
+
+
 # ============================================================
 # Two-band model of twisted multilayer black phosphorus
 # ============================================================
@@ -56,6 +134,8 @@ class TwistedBPModel:
         # effective interface coupling strength (in eV)
         if N_top == 4:
             self.coupling = 0.07 # For 4+4, 0.07 is a good fit.
+        elif N_top == 1:
+            self.coupling = 0.120 # For 1+1, 0.120 is a good fit.
         else:
             self.coupling = 0.095 # For 2+2/3+3, 0.095 is a good fit.
 
@@ -715,7 +795,7 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
         folded_sym_labels = [r"$X'$", r'$\Gamma$', r"$Y'$"]
         if folded_is_structured:
             # Structured: folded_k is (n_k,), folded_E is (n_k, n_bands_folded)
-            plt.plot(folded_k, folded_E[:, 0] - vbm, 'r-', lw=2.5, alpha=0.5, label='Folded Bands')
+            plt.plot(folded_k, folded_E[:, 0] - vbm, 'r-', lw=2.5, alpha=0.5, label='Folded Bands', zorder=1)
             plt.plot(folded_k, folded_E[:, 1:] - vbm, 'r-', lw=2.5, alpha=0.5)
         else:
             # Legacy scatter format
@@ -724,6 +804,37 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
                         linewidths=0.5, zorder=0)
         for pos in folded_sym_pos:
             plt.axvline(pos, c='gray', ls='-', lw=0.5)
+
+        # # # Add the DFT data
+        # # vasp_dat = np.loadtxt("571.dat")
+        # # vasp_kpath = vasp_dat[:, 0]
+        # # vasp_kpath = vasp_kpath / max(vasp_kpath) * max(folded_k) # normalize to our k_dist
+        # # vasp_energies = vasp_dat[:, 1] + 0.271584 # set VBM to zero
+        # # vasp_energies = vasp_energies.reshape(848,40)
+        # # vasp_energies[700:,:] += 1.015
+
+        # # plt.scatter(vasp_kpath, vasp_energies, s=20, color='black', alpha=0.8, label='VASP Bands',
+        # #             facecolors='white', edgecolors='black', linewidths=1.6, zorder=0)
+            
+
+
+        # # # Add the DFT data
+        # abacus_dat = np.loadtxt("BANDS_1.dat")
+        # abacus_kpath = abacus_dat[:, 1]
+        # abacus_kpath = abacus_kpath / max(abacus_kpath) * max(folded_k) # normalize to our k_dist
+        # abacus_energies = abacus_dat[:, 1:] - 3.7658523789 # set VBM to zero
+        # # abacus_energies = abacus_energies.T
+
+        # # 将每个 k 点重复 2522 次，使其与所有能量值一一对应
+        # abacus_kpath_expanded = np.repeat(abacus_kpath, abacus_energies.shape[1])
+        # # 将能量矩阵展平为一维数组
+        # abacus_energies_flat = abacus_energies.flatten()
+
+        # plt.scatter(abacus_kpath_expanded, abacus_energies_flat, 
+        #             s=20, color='black', alpha=0.8, label='ABACUS Bands',
+        #             facecolors='white', edgecolors='black', linewidths=1.6, zorder=0)
+
+
         plt.xticks(folded_sym_pos, folded_sym_labels)
         plt.ylim(y_lim)
         plt.xlim(0, 2*k_boundary)
@@ -795,20 +906,19 @@ def plot_3d_bands(N_top=1, N_bottom=1, twist_angle=0.0,
     )
 
 
-def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
-                                   E_range=(0.0, 1.0), n_E=500, eta=0.010,
-                                   k_range=0.15, n_k=60, save_prefix=""):
+def calculate_ipa_dielectric_function(N_top=1, N_bottom=1, twist_angle=0.0,
+                                      E_range=(0.0, 1.0), n_E=500, eta=0.010,
+                                      k_range=0.15, n_k=60, layerthickness=5.2,
+                                      eps_inf=1.0):
     r"""
-    Calculate optical absorption spectrum via Kubo-Greenwood formula.
+    Calculate IPA dielectric function from interband transitions.
 
         \epsilon_2^{ii}(\omega) \propto
         \sum_{v,c} \int_{BZ} d^2k
         |\langle c,k | v_i | v,k \rangle|^2 / (E_{c,k} - E_{v,k})^2
         \cdot \delta(E_{c,k} - E_{v,k} - \hbar \omega)
-
-    Absorbance is proportional to \epsilon_2 * \omega, so we plot that as the final spectrum.
     """
-    print(f"Calculating optical conductivity spectrum...")
+    print(f"Calculating IPA dielectric function...")
     model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
 
     kx = np.linspace(-k_range, k_range, n_k)
@@ -831,7 +941,7 @@ def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
     Mx2 = np.abs(vx_eig)**2
     My2 = np.abs(vy_eig)**2
 
-    omegas = np.linspace(E_range[0], E_range[1], n_E)
+    omegas = np.linspace(E_range[0], E_range[1]*2, n_E*2)
     sigma_xx = np.zeros_like(omegas)
     sigma_yy = np.zeros_like(omegas)
 
@@ -866,8 +976,50 @@ def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
 
     sigma_xx /= Nk
     sigma_yy /= Nk
-    absorption_xx = sigma_xx * omegas
-    absorption_yy = sigma_yy * omegas
+
+    e2_coulomb = 14.3996454784255  # e^2/(4*pi*eps0), eV*Angstrom
+    a_lat = model.a_lat
+    b_lat = model.b_lat
+    A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
+    V_uc = A_uc * layerthickness * (N_top + N_bottom)
+    pref = 16 * np.pi * e2_coulomb / V_uc
+
+    eps2_xx = pref * sigma_xx
+    eps2_yy = pref * sigma_yy
+    eps1_xx = kramers_kronig_eps1_from_eps2(omegas, eps2_xx, eps_inf=eps_inf)
+    eps1_yy = kramers_kronig_eps1_from_eps2(omegas, eps2_yy, eps_inf=eps_inf)
+
+    eps_data = {
+        'eps1_xx': eps1_xx,
+        'eps2_xx': eps2_xx,
+        'eps1_yy': eps1_yy,
+        'eps2_yy': eps2_yy,
+        'sigma_xx_raw': sigma_xx,
+        'sigma_yy_raw': sigma_yy,
+    }
+    return omegas, model, eps_data
+
+
+def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
+                                   E_range=(0.0, 1.0), n_E=500, eta=0.010,
+                                   k_range=0.15, n_k=60, layerthickness=5.2,
+                                   save_prefix=""):
+    r"""
+    Calculate IPA dielectric function and omega * epsilon_2 spectrum.
+    """
+    omegas, _, eps_data = calculate_ipa_dielectric_function(
+        N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle,
+        E_range=E_range, n_E=n_E, eta=eta,
+        k_range=k_range, n_k=n_k, layerthickness=layerthickness,
+    )
+    eps1_xx = eps_data['eps1_xx']
+    eps2_xx = eps_data['eps2_xx']
+    eps1_yy = eps_data['eps1_yy']
+    eps2_yy = eps_data['eps2_yy']
+    sigma_xx = eps_data['sigma_xx_raw']
+    sigma_yy = eps_data['sigma_yy_raw']
+    absorption_xx = omegas * eps2_xx
+    absorption_yy = omegas * eps2_yy
 
     plt.figure(figsize=(8, 6))
     plt.plot(omegas, absorption_xx, 'r-', label=r'x-polarized', lw=2)
@@ -885,9 +1037,150 @@ def calculate_optical_conductivity(N_top=1, N_bottom=1, twist_angle=0.0,
     print(f"Saved Optical Absorption Spectrum: {fname}")
     _save_dat(
         f"EM_absorption{save_prefix}.dat",
-        np.column_stack([omegas, absorption_xx, absorption_yy, sigma_xx, sigma_yy]),
-        "omega_eV absorption_xx absorption_yy sigma_xx_raw sigma_yy_raw"
+        np.column_stack([
+            omegas,
+            eps1_xx, eps2_xx,
+            eps1_yy, eps2_yy,
+            absorption_xx, absorption_yy,
+            sigma_xx, sigma_yy,
+        ]),
+        "omega_eV eps1_xx eps2_xx eps1_yy eps2_yy "
+        "omega_eps2_xx omega_eps2_yy sigma_xx_raw sigma_yy_raw"
     )
+
+
+def calculate_current(N_top=1, N_bottom=1, twist_angle=0.0, layerthickness=5.2,
+                      E_range=(0.0, 1.0), n_E=500, eta=0.010,
+                      k_range=0.15, n_k=60, band_window=None,n_k_bse=30,
+                      intensity_W_cm2=1.6e4, sample_width_um=2.0,
+                      shift_source="ipa", shift_results=None,
+                      n_val=2, n_cond=2,
+                      kappa=2.5, r0=5.0,
+                      save_prefix="", **bse_kwargs):
+    r"""
+    Compute photocurrent from z-shift-current conductivity.
+
+        I(omega) = (1 - R) * sigma_zbb(omega) * 2 * I_light * d * w
+                   / (epsilon0 * c)
+
+    The z-shift conductivity is expected in microampere/V^2, matching
+    calculate_z_shift_current and calculate_bse_z_shift_current outputs.
+
+    Parameters
+    ----------
+    shift_source : {"ipa", "bse", "provided"}
+        "ipa" calls calculate_z_shift_current, "bse" calls
+        calculate_bse_z_shift_current, and "provided" uses shift_results.
+    shift_results : tuple or dict
+        For "provided", pass either (omegas, results) or a dict with
+        keys "omegas" and "results".
+    """
+    total_thickness_A = layerthickness * (N_top + N_bottom)
+
+    print("\n[1] Computing IPA dielectric function for reflectivity...")
+    omegas_eps, _, eps_data = calculate_ipa_dielectric_function(
+        N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle,
+        E_range=E_range, n_E=n_E, eta=eta,
+        k_range=k_range, n_k=n_k,
+        layerthickness=layerthickness,
+    )
+    eps1_xx, eps2_xx = eps_data['eps1_xx'], eps_data['eps2_xx']
+    eps1_yy, eps2_yy = eps_data['eps1_yy'], eps_data['eps2_yy']
+    refl_xx = normal_incidence_reflectivity(eps1_xx, eps2_xx)
+    refl_yy = normal_incidence_reflectivity(eps1_yy, eps2_yy)
+
+    print(f"\n[2] Getting z-shift-current conductivity ({shift_source})...")
+    if shift_source == "ipa":
+        omegas_sc, sc_results = calculate_z_shift_current(
+            N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle,
+            E_range=E_range, n_E=n_E, eta=eta,
+            k_range=k_range, n_k=n_k,
+            layerthickness=layerthickness,
+            band_window=band_window,
+            save_prefix=save_prefix,
+        )
+    elif shift_source == "bse":
+        omegas_sc, sc_results, _, _ = calculate_bse_z_shift_current(
+            N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle,
+            E_range=E_range, n_E=n_E, eta=eta,
+            k_range=k_range,n_k_bse =n_k_bse,
+            thickness=layerthickness,
+            band_window=band_window,
+            save_prefix=save_prefix,
+            n_val=n_val, n_cond=n_cond,
+            kappa=kappa, r0=r0,
+            **bse_kwargs,
+        )
+    elif shift_source == "provided":
+        if shift_results is None:
+            raise ValueError("shift_results must be provided when shift_source='provided'.")
+        if isinstance(shift_results, dict):
+            omegas_sc = shift_results['omegas']
+            sc_results = shift_results['results']
+        else:
+            omegas_sc, sc_results = shift_results[:2]
+    else:
+        raise ValueError("shift_source must be 'ipa', 'bse', or 'provided'.")
+
+    if len(omegas_sc) != len(omegas_eps) or not np.allclose(omegas_sc, omegas_eps):
+        refl_xx = np.interp(omegas_sc, omegas_eps, refl_xx)
+        refl_yy = np.interp(omegas_sc, omegas_eps, refl_yy)
+        eps1_xx = np.interp(omegas_sc, omegas_eps, eps1_xx)
+        eps2_xx = np.interp(omegas_sc, omegas_eps, eps2_xx)
+        eps1_yy = np.interp(omegas_sc, omegas_eps, eps1_yy)
+        eps2_yy = np.interp(omegas_sc, omegas_eps, eps2_yy)
+
+    sigma_zxx = sc_results[('z', 'x', 'x')]
+    sigma_zyy = sc_results[('z', 'y', 'y')]
+    current_zxx_A = shift_conductivity_to_current(
+        sigma_zxx, refl_xx, total_thickness_A, sample_width_um,
+        intensity_W_cm2=intensity_W_cm2,
+    )
+    current_zyy_A = shift_conductivity_to_current(
+        sigma_zyy, refl_yy, total_thickness_A, sample_width_um,
+        intensity_W_cm2=intensity_W_cm2,
+    )
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(omegas_sc, current_zxx_A * 1.0e9, 'r-', lw=2, label=r'$I_{zxx}$')
+    plt.plot(omegas_sc, current_zyy_A * 1.0e9, 'b--', lw=2, label=r'$I_{zyy}$')
+    plt.axhline(0, color='k', lw=0.5, ls='--')
+    plt.xlabel('Photon Energy (eV)')
+    plt.ylabel('Current (nA)')
+    plt.title(rf'$I={intensity_W_cm2:.2e}$ W/cm$^2$, $w={sample_width_um:g}$ $\mu$m')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.xlim(E_range)
+    fname = f"EM_current_{shift_source}{save_prefix}_{N_top}_{N_bottom}.png"
+    plt.savefig(fname, dpi=300)
+    plt.close()
+    print(f"Saved current figure: {fname}")
+
+    _save_dat(
+        f"EM_current_{shift_source}{save_prefix}_{N_top}_{N_bottom}.dat",
+        np.column_stack([
+            omegas_sc,
+            current_zxx_A, current_zyy_A,
+            sigma_zxx, sigma_zyy,
+            refl_xx, refl_yy,
+            eps1_xx, eps2_xx, eps1_yy, eps2_yy,
+        ]),
+        "omega_eV current_zxx_A current_zyy_A "
+        "sigma_zxx_uA_per_V2 sigma_zyy_uA_per_V2 "
+        "reflectivity_x reflectivity_y eps1_xx eps2_xx eps1_yy eps2_yy"
+    )
+    return omegas_sc, {
+        'current_zxx_A': current_zxx_A,
+        'current_zyy_A': current_zyy_A,
+        'reflectivity_x': refl_xx,
+        'reflectivity_y': refl_yy,
+        'sigma_zxx_uA_per_V2': sigma_zxx,
+        'sigma_zyy_uA_per_V2': sigma_zyy,
+        'eps1_xx': eps1_xx,
+        'eps2_xx': eps2_xx,
+        'eps1_yy': eps1_yy,
+        'eps2_yy': eps2_yy,
+    }
 
 
 def plot_transition_matrix_elements(N_top=1, N_bottom=1, twist_angle=0.0,
@@ -3101,7 +3394,15 @@ if __name__ == "__main__":
     # calculate_optical_conductivity(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
     #                                n_k=240, n_E=500,eta=eta,
     #                                k_range=G_moire/2, E_range=erange)
-                                   
+
+    # # # Optical Current
+    # # # --------------------------------------------
+    calculate_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                                    n_k=240, n_E=500,eta=eta,shift_source="bse",
+                                    n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
+                                   E_range=erange, k_range=G_moire/2,
+                                   kappa=kappa, r0=r0,)
+    
     # # # Matrix Element Map (VBM -> CBM)
     # # # --------------------------------------------
     # plot_transition_matrix_elements(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
@@ -3140,14 +3441,14 @@ if __name__ == "__main__":
     #     save_prefix=f"_N{n_top}_{n_bottom}"
     # )
 
-    # # BSE Excitonic Z-Shift Current
-    # # --------------------------------------------
-    calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                   n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
-                                   E_range=erange, k_range=G_moire/2,
-                                   kappa=kappa, r0=r0,eta=eta,
-                                   use_gpu="auto", gpu_dtype="complex64",
-                                   gpu_full_eigh_max_dim=32000,)
+    # # # BSE Excitonic Z-Shift Current
+    # # # --------------------------------------------
+    # calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
+    #                                E_range=erange, k_range=G_moire/2,
+    #                                kappa=kappa, r0=r0,eta=eta,
+    #                                use_gpu="auto", gpu_dtype="complex64",
+    #                                gpu_full_eigh_max_dim=32000,)
 
     # # # Exciton Oscillator Strength (stem plot)
     # # # --------------------------------------------
@@ -3158,14 +3459,14 @@ if __name__ == "__main__":
     #                                   kappa=kappa, r0=r0,
     #                                   polarization='both')
 
-    # # BSE Excitonic Absorbance
-    # # --------------------------------------------
-    calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                              E_range=erange, n_E=500, eta=eta,
-                              k_range=G_moire/2, n_k_bse=n_k_bse,
-                              n_val=2, n_cond=n_cond,
-                              kappa=kappa, r0=r0,
-                              plot_ipa_comparison=True,)
+    # # # BSE Excitonic Absorbance
+    # # # --------------------------------------------
+    # calculate_bse_absorbance(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                           E_range=erange, n_E=500, eta=eta,
+    #                           k_range=G_moire/2, n_k_bse=n_k_bse,
+    #                           n_val=2, n_cond=n_cond,
+    #                           kappa=kappa, r0=r0,
+    #                           plot_ipa_comparison=True,)
     
     # # # Excitonic Absorbance
     # # # --------------------------------------------
