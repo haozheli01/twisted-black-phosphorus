@@ -124,20 +124,23 @@ class TwistedBPModel:
         The total hamiltonian is:
         H = [[H_top, V_sub], [V_sub^dagger, H_bot]]
         """
-        # monolayer BP parameters
-        self.b_lat=4.588 # armchair direction
-        self.a_lat=3.296 # zig-zag direction
+        # bulk BP parameters from MP
+        self.b_lat=4.544 # armchair direction
+        self.a_lat=3.295 # zig-zag direction
+
         self.N_top = N_top
         self.N_bottom = N_bottom
         self.twist_angle = twist_angle
 
         # effective interface coupling strength (in eV)
         if N_top == 4:
-            self.coupling = 0.07 # For 4+4, 0.07 is a good fit.
+            self.coupling = 0.075 # For 4+4, 0.075 is a good fit.
         elif N_top == 1:
             self.coupling = 0.120 # For 1+1, 0.120 is a good fit.
-        else:
-            self.coupling = 0.095 # For 2+2/3+3, 0.095 is a good fit.
+        elif N_top == 3:
+            self.coupling = 0.095 # For 3+3, 0.095 is a good fit.
+        elif N_top == 2:
+            self.coupling = 0.095 # For 2+2, 0.105 is a good fit.
 
         # tight-binding parameters
         self.a1 = 2.22
@@ -157,10 +160,18 @@ class TwistedBPModel:
         self.t9=-0.042
         self.t10=0.073
         # interlayer hoppings (in eV)
-        self.t1p=0.524
-        self.t2p=0.180
-        self.t3p=-0.123
-        self.t4p=-0.168
+        # adjusted parameters to better fit the DFT band structure
+        dt = 0.160
+        self.t1p=0.524 - dt
+        self.t2p=-0.270 if N_top == 2 else -0.160
+        self.t3p=0.08
+        self.t4p=-0.168 + dt
+        # original parameters from Rudenko's paper
+        # self.t1p=0.524
+        # self.t2p=0.180
+        # self.t3p=-0.123
+        # self.t4p=-0.168
+
         # self.t5p=0.005 # we dont use this here
 
         # Precomputed geometric factors (k-independent, used in all H/v/w methods)
@@ -813,26 +824,19 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
         # # vasp_energies = vasp_energies.reshape(848,40)
         # # vasp_energies[700:,:] += 1.015
 
-        # # plt.scatter(vasp_kpath, vasp_energies, s=20, color='black', alpha=0.8, label='VASP Bands',
+        # # plt.scatter(vasp_kpath, vasp_energies, s=36, color='black', alpha=0.8, label='VASP Bands',
         # #             facecolors='white', edgecolors='black', linewidths=1.6, zorder=0)
             
+        # Add the DFT data
+        vasp_dat = np.loadtxt("571-33.dat")
+        vasp_kpath = vasp_dat[:, 0]
+        vasp_kpath = vasp_kpath / max(vasp_kpath) * max(folded_k) # normalize to our k_dist
+        vasp_energies = vasp_dat[:, 1] + 0.071 # set VBM to zero
+        vasp_energies = vasp_energies.reshape(2521,24)
+        vasp_energies[2100:,:] += 0.525
 
-
-        # # # Add the DFT data
-        # abacus_dat = np.loadtxt("BANDS_1.dat")
-        # abacus_kpath = abacus_dat[:, 1]
-        # abacus_kpath = abacus_kpath / max(abacus_kpath) * max(folded_k) # normalize to our k_dist
-        # abacus_energies = abacus_dat[:, 1:] - 3.7658523789 # set VBM to zero
-        # # abacus_energies = abacus_energies.T
-
-        # # 将每个 k 点重复 2522 次，使其与所有能量值一一对应
-        # abacus_kpath_expanded = np.repeat(abacus_kpath, abacus_energies.shape[1])
-        # # 将能量矩阵展平为一维数组
-        # abacus_energies_flat = abacus_energies.flatten()
-
-        # plt.scatter(abacus_kpath_expanded, abacus_energies_flat, 
-        #             s=20, color='black', alpha=0.8, label='ABACUS Bands',
-        #             facecolors='white', edgecolors='black', linewidths=1.6, zorder=0)
+        plt.scatter(vasp_kpath, vasp_energies, s=50, color='black', alpha=0.8, label='VASP Bands',
+                    facecolors='white', edgecolors='black', linewidths=1.6, zorder=0)
 
 
         plt.xticks(folded_sym_pos, folded_sym_labels)
@@ -1603,13 +1607,16 @@ def plot_bandgap_scaling(N_top=1, N_bottom=1, twist_angle=0.0,
     """
     # Get the bandgap of my model
     gap_level = []
+    sub_gap_level = []
     for N_bot in range(N_bottom[0], N_bottom[1]):
         model = TwistedBPModel(N_top=N_top, N_bottom=N_bot, twist_angle=twist_angle)
         k_points = np.array([[0.0, 0.0]])
         evals, _ = np.linalg.eigh(model.get_hamiltonians(k_points))
         mid = evals.shape[1] // 2
         E_gap = evals[0, mid] - evals[0, mid-1]
+        E_subgap = evals[0, mid] - evals[0, mid-2]
         gap_level.append(E_gap)
+        sub_gap_level.append(E_subgap)
         print(f"N_bottom={N_bot}: Bandgap = {E_gap:.3f} eV")
 
     # Get the analytic levels, ref: Huang et al., Science 386, 526–531 (2024)
@@ -1617,12 +1624,14 @@ def plot_bandgap_scaling(N_top=1, N_bottom=1, twist_angle=0.0,
     Y_bright = E_g - 2 * gamma_c * np.cos(np.pi/(level_list + N_top + 1)) + 2 * gamma_v * np.cos(np.pi/(N_top + 1))
     X_bright = E_g - 2 * gamma_c * np.cos(np.pi/(level_list + N_top + 1)) + 2 * gamma_v * np.cos(np.pi/(level_list + 1))
     gap_level = np.array(gap_level)
+    sub_gap_level = np.array(sub_gap_level)
 
     # Plotting
     plt.figure(figsize=(5, 5))
     plt.plot(level_list, X_bright, label='X-bright (analytic)', color='red', ls='--')
     plt.plot(level_list, Y_bright, label='Y-bright (analytic)', color='blue', ls='--')
     plt.scatter(range(N_bottom[0], N_bottom[1]), gap_level, label='model', color='red', marker='o')
+    plt.scatter(range(N_bottom[0], N_bottom[1]), sub_gap_level, label='sub-gap (model)', color='blue', marker='o')
     # plt.tight_layout()
     plt.ylim(0.2,1.6)
     plt.legend()
@@ -3341,14 +3350,16 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
 if __name__ == "__main__":
 
     # BP parameters
-    b_lat = 4.588
-    a_lat = 3.296
+    # bulk from MP
+    b_lat = 4.544
+    a_lat = 3.295
+
     G_moire = 2 * np.pi * np.abs(1/b_lat - 1/a_lat)
     n_top = 3
     n_bottom = n_top
     twist_angle = np.pi / 2
     kappa=4.0
-    r0=15.0
+    r0=20.0
     # twist_angle = 0.0
     if n_top == 3:
         gamma_c = 0.58
@@ -3395,13 +3406,13 @@ if __name__ == "__main__":
     #                                n_k=240, n_E=500,eta=eta,
     #                                k_range=G_moire/2, E_range=erange)
 
-    # # # Optical Current
-    # # # --------------------------------------------
-    calculate_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                    n_k=240, n_E=500,eta=eta,shift_source="bse",
-                                    n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
-                                   E_range=erange, k_range=G_moire/2,
-                                   kappa=kappa, r0=r0,)
+    # # # # Optical Current
+    # # # # --------------------------------------------
+    # calculate_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                 n_k=240, n_E=500,eta=eta,shift_source="bse",
+    #                                 n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
+    #                                E_range=erange, k_range=G_moire/2,
+    #                                kappa=kappa, r0=r0,)
     
     # # # Matrix Element Map (VBM -> CBM)
     # # # --------------------------------------------
@@ -3412,7 +3423,7 @@ if __name__ == "__main__":
     # # # Bandgap scaling with N_bottom
     # # # --------------------------------------------
     # plot_bandgap_scaling(N_top=n_top, N_bottom=[n_top,10], twist_angle=twist_angle,
-    #                         E_g=2.1, gamma_c = 0.58, gamma_v = -0.32,)
+    #                         E_g=2.1, gamma_c = gamma_c, gamma_v = gamma_v,)
 
 
     # # # Shift Current Calculation
