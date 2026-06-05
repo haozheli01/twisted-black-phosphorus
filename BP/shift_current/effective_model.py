@@ -140,7 +140,7 @@ class TwistedBPModel:
         elif N_top == 3:
             self.coupling = 0.095 # For 3+3, 0.095 is a good fit.
         elif N_top == 2:
-            self.coupling = 0.095 # For 2+2, 0.105 is a good fit.
+            self.coupling = 0.095 # For 2+2, 0.095 is a good fit.
 
         # tight-binding parameters
         self.a1 = 2.22
@@ -163,8 +163,8 @@ class TwistedBPModel:
         # adjusted parameters to better fit the DFT band structure
         dt = 0.160
         self.t1p=0.524 - dt
-        self.t2p=-0.270 if N_top == 2 else -0.160
-        self.t3p=0.08
+        self.t2p=-0.200 if N_top == 2 else -0.150
+        self.t3p=0.060
         self.t4p=-0.168 + dt
         # original parameters from Rudenko's paper
         # self.t1p=0.524
@@ -741,7 +741,7 @@ def plot_layer_projected_unfolded_bands(N_top=4, N_bottom=4, twist_angle=0.0,
     cbar = fig.colorbar(sm, ax=ax, pad=0.02)
     # cbar.set_label(r'Layer Polarization $P_\mathrm{layer}$', rotation=270, labelpad=15)
     cbar.set_ticks([-1,1])
-    cbar.set_ticklabels(['Bottom','Top'])
+    cbar.set_ticklabels(['Bottom','Top'],fontsize=12)
 
     plt.tight_layout()
     suffix = f"N{N_top}_{N_bottom}_tw{np.degrees(twist_angle):.0f}{save_prefix}"
@@ -831,9 +831,9 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
         vasp_dat = np.loadtxt("571-33.dat")
         vasp_kpath = vasp_dat[:, 0]
         vasp_kpath = vasp_kpath / max(vasp_kpath) * max(folded_k) # normalize to our k_dist
-        vasp_energies = vasp_dat[:, 1] + 0.071 # set VBM to zero
-        vasp_energies = vasp_energies.reshape(2521,24)
-        vasp_energies[2100:,:] += 0.525
+        vasp_energies = vasp_dat[:, 1] + 0.0554 # set VBM to zero
+        vasp_energies = vasp_energies.reshape(2528,30)
+        vasp_energies[2100:,:] += 0.560
 
         plt.scatter(vasp_kpath, vasp_energies, s=50, color='black', alpha=0.8, label='VASP Bands',
                     facecolors='white', edgecolors='black', linewidths=1.6, zorder=0)
@@ -1966,6 +1966,12 @@ def _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
     vx_eig = U_dag @ vx_orb @ U
     vy_eig = U_dag @ vy_orb @ U
 
+    # 4b. Generalized derivative (curvature) matrices in eigenbasis
+    w_xx_orb, w_yy_orb, w_xy_orb = model.get_generalized_derivative_matrices(k_points)
+    w_xx_eig = U_dag @ w_xx_orb @ U
+    w_yy_eig = U_dag @ w_yy_orb @ U
+    w_xy_eig = U_dag @ w_xy_orb @ U
+
     # 5. Interband position matrix elements  r^b_{cv} = v^b_{cv} / (i * omega_{cv})
     E_v = evals[:, v_idx]
     E_c = evals[:, c_idx]
@@ -2073,6 +2079,7 @@ def _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
         'z_diag': z_diag, 'delta_z': delta_z,
         'A_uc': A_uc, 'Omega_S': Omega_S, 'A_coeff': A_coeff, 'dim_bse': dim_bse,
         'U': U, 'U_dag': U_dag, 'vx_eig': vx_eig, 'vy_eig': vy_eig,
+        'w_xx_eig': w_xx_eig, 'w_yy_eig': w_yy_eig, 'w_xy_eig': w_xy_eig,
     }
 
 
@@ -2264,6 +2271,313 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                           N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle,
                           kappa=kappa, r0=r0, thickness=thickness,
                           save_prefix=save_prefix)
+
+    return omegas, results, Omega_S, A_coeff
+
+
+def calculate_bse_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
+                                E_range=(0.0, 1.0), n_E=400, eta=0.010,
+                                k_range=0.15, n_k_bse=30,
+                                n_val=2, n_cond=2,
+                                thickness=5.2,
+                                kappa=2.5, r0=5.0,
+                                plot_ipa_comparison=True,
+                                band_window=None, save_prefix="",
+                                use_gpu="auto", gpu_dtype="complex64",
+                                gpu_full_eigh_max_dim=32000):
+    r"""
+    BSE excitonic shift current including both in-plane and out-of-plane components.
+
+    In-plane  sigma^{abb}(w) = C * Σ_S  -Im[d^{b*}_S * g^{ab}_S] * δ(Ω_S - ω)
+    Out-of-plane sigma^{zbb}(w) = C * Σ_S  R^z_{S0} * |d^b_S|^2 * δ(Ω_S - ω)
+
+    where:
+        d^b_S = Σ_{vck} A^{S*}_{vck} r^b_{cv}(k)    (exciton optical dipole)
+        g^{ab}_S = Σ_{vck} A^{S*}_{vck} (r^b_{cv})_{;a}(k)  (covariant derivative)
+        R^z_{S0} = Σ_{vck} |A^S_{vck}|^2 Δz(vck)    (many-body shift vector)
+
+    The covariant derivative (r^b_{cv})_{;a} includes terms A, B, C from the
+    gauge-invariant SOS formula (Phys. Rev. B 61, 5337 (2000)).
+
+    Parameters
+    ----------
+    n_k_bse : int
+        k-grid per direction for BSE (total Nk = n_k_bse^2).
+    n_val, n_cond : int
+        Number of valence/conduction bands in BSE active space.
+    thickness : float
+        Thickness in Angstrom for z-direction shift current.
+    kappa : float
+        Effective dielectric constant of environment.
+    r0 : float
+        2D polarizability screening length in Angstrom.
+    plot_ipa_comparison : bool
+        If True, overlay IPA shift current for comparison.
+    """
+    comp_list_inplane = [('x', 'x', 'x'), ('x', 'y', 'y'),
+                         ('y', 'x', 'x'), ('y', 'y', 'y')]
+    comp_list_z = [('z', 'x', 'x'), ('z', 'y', 'y')]
+    comp_list = comp_list_inplane + comp_list_z
+
+    print("=" * 60)
+    print("BSE Excitonic Shift Current (In-plane + Out-of-plane)")
+    print("=" * 60)
+    print(f"  Grid: {n_k_bse}x{n_k_bse} = {n_k_bse**2} k-points")
+    print(f"  Active space: {n_val}v x {n_cond}c")
+    print(f"  BSE dimension: {n_val * n_cond * n_k_bse**2}")
+    print(f"  Keldysh params: kappa={kappa}, r0={r0} A")
+    print(f"  thickness={thickness} A")
+
+    model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
+
+    print(f"\n[1-4] Running BSE pipeline...")
+    pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
+                             thickness=thickness, kappa=kappa, r0=r0,
+                             band_window=band_window, use_gpu=use_gpu,
+                             gpu_dtype=gpu_dtype,
+                             gpu_full_eigh_max_dim=gpu_full_eigh_max_dim)
+
+    Nk = pipe['Nk']
+    Nb = pipe['Nb']
+    evals = pipe['evals']
+    v_idx = pipe['v_idx']
+    c_idx = pipe['c_idx']
+    Nv, Nc = pipe['Nv'], pipe['Nc']
+    dE = pipe['dE']
+    r_b = pipe['r_b']
+    delta_z = pipe['delta_z']
+    Omega_S = pipe['Omega_S']
+    A_coeff = pipe['A_coeff']
+    dim_bse = pipe['dim_bse']
+    vx_eig = pipe['vx_eig']
+    vy_eig = pipe['vy_eig']
+    w_xx_eig = pipe['w_xx_eig']
+    w_yy_eig = pipe['w_yy_eig']
+    w_xy_eig = pipe['w_xy_eig']
+    a_lat = model.a_lat
+    b_lat = model.b_lat
+    A_uc = 1 / (np.abs(1 / b_lat - 1 / a_lat))**2
+    V_uc = A_uc * thickness * (N_top + N_bottom)
+
+    # ----------------------------------------------------------------
+    # Compute covariant derivatives (r^b_{cv})_{;a}(k) in active space
+    # ----------------------------------------------------------------
+    eps_denom = 1e-5
+    v_map = {'x': vx_eig, 'y': vy_eig}
+    w_map = {'xx': w_xx_eig, 'yy': w_yy_eig, 'xy': w_xy_eig, 'yx': w_xy_eig}
+    w_all = evals[:, :, None] - evals[:, None, :]  # (Nk, Nb, Nb)
+
+    r_deriv = {}  # key: (a_dir, b_dir) -> (Nk, Nv, Nc)
+
+    # Unique (a,b) pairs needed for in-plane components
+    ab_pairs = [('x', 'x'), ('x', 'y'), ('y', 'x'), ('y', 'y')]
+    for a_dir, b_dir in ab_pairs:
+        label = "(r^%s)_{%s}" % (b_dir, a_dir)
+        print(f"  Computing covariant derivative {label}...")
+        v_a = v_map[a_dir]
+        v_b = v_map[b_dir]
+        w_ab = w_map[a_dir + b_dir]
+
+        deriv = np.zeros((Nk, Nv, Nc), dtype=np.complex128)
+
+        for ic, n in enumerate(c_idx):
+            v_b_n = v_b[:, n, :]
+            v_a_n = v_a[:, n, :]
+            v_a_nn = v_a[:, n, n]
+            v_b_nn = v_b[:, n, n]
+            w_n = w_all[:, n, :]  # E_n - E_p
+
+            for iv, m in enumerate(v_idx):
+                w_nm = evals[:, n] - evals[:, m]
+                nonzero = w_nm > eps_denom
+
+                # Term A
+                delta_a = v_a_nn[nonzero] - v_a[nonzero, m, m]
+                delta_b = v_b_nn[nonzero] - v_b[nonzero, m, m]
+                termA = np.zeros(Nk, dtype=np.complex128)
+                termA[nonzero] = (v_b[nonzero, n, m] * delta_a
+                                  + v_a[nonzero, n, m] * delta_b) / w_nm[nonzero]
+
+                # Term B
+                w_pm = w_all[:, :, m]  # E_p - E_m
+                valid_p = (np.abs(w_n) > eps_denom) & (np.abs(w_pm) > eps_denom)
+                valid_p[:, n] = False
+                valid_p[:, m] = False
+                valid_p &= nonzero[:, None]
+
+                v_b_pm = v_b[:, :, m]
+                v_a_pm = v_a[:, :, m]
+                num1 = v_b_n * v_a_pm  # v^b_{np} v^a_{pm}
+                num2 = v_a_n * v_b_pm  # v^a_{np} v^b_{pm}
+                termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
+                termB_contrib[valid_p] = (num1[valid_p] / w_pm[valid_p]
+                                          - num2[valid_p] / w_n[valid_p])
+                termB = np.sum(termB_contrib, axis=1)
+
+                # Term C
+                termC = -w_ab[:, n, m]
+
+                K_nm = termA + termB + termC
+                deriv_vals = np.zeros(Nk, dtype=np.complex128)
+                deriv_vals[nonzero] = K_nm[nonzero] / (-1j * w_nm[nonzero])
+                deriv[:, iv, ic] = deriv_vals
+
+        r_deriv[(a_dir, b_dir)] = deriv
+
+    # ----------------------------------------------------------------
+    # Build exciton observables and spectra
+    # ----------------------------------------------------------------
+    delta_z_flat = delta_z.reshape(dim_bse)
+    omegas = np.linspace(E_range[0], E_range[1], n_E)
+    results = {}
+
+    print(f"\n[5] Computing exciton observables and spectra...")
+    for comp in comp_list:
+        a_dir, b_dir, c_dir = comp
+        r_b_flat = r_b[b_dir].reshape(dim_bse)
+
+        # Optical dipole: d^{b*}_S = Σ A^{S*}_{vck} r^b_{cv}(k)
+        d_b_S = A_coeff.conj().T @ r_b_flat
+
+        if a_dir == 'z':
+            # Out-of-plane: many-body shift vector
+            R_z_S0 = np.sum(np.abs(A_coeff)**2 * delta_z_flat[:, None], axis=0)
+            integrand_S = np.real(R_z_S0 * np.abs(d_b_S)**2)
+        else:
+            # In-plane: covariant derivative
+            r_deriv_flat = r_deriv[(a_dir, b_dir)].reshape(dim_bse)
+            g_ab_S = A_coeff.conj().T @ r_deriv_flat  # g^{ab*}_S
+
+            # integrand = -Im[d^{b*}_S * g^{ab}_S]
+            integrand_S = -np.imag(d_b_S * g_ab_S.conj())
+
+        # Sum rule check
+        bse_sum = np.sum(integrand_S)
+        if a_dir == 'z':
+            ipa_sum = np.sum(np.real(delta_z_flat * np.abs(r_b_flat)**2))
+        else:
+            r_deriv_flat = r_deriv[(a_dir, b_dir)].reshape(dim_bse)
+            ipa_sum = np.sum(-np.imag(r_b_flat.conj() * r_deriv_flat))
+        print(f"    Shift weight sum {a_dir}{b_dir}{c_dir}: BSE={bse_sum:.6e}, "
+              f"IPA={ipa_sum:.6e}, ratio={bse_sum/ipa_sum:.6f}")
+
+        # Broaden with Lorentzian
+        diff = omegas[:, None] - Omega_S[None, :]
+        lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+        sigma = lorentz @ integrand_S / Nk
+        results[comp] = sigma
+
+    # Physical prefactor
+    e_charge = 1.602176634e-19
+    hbar = 1.054571817e-34
+    prefactor = (2 * np.pi * e_charge**2) / (hbar * V_uc) * 1E6
+    for comp in comp_list:
+        results[comp] *= prefactor
+
+    # ----------------------------------------------------------------
+    # IPA comparison (on same k-grid)
+    # ----------------------------------------------------------------
+    ipa_results = None
+    if plot_ipa_comparison:
+        print(f"\n[6] Computing IPA comparison on same grid...")
+        ipa_results = {}
+        for comp in comp_list:
+            a_dir, b_dir, c_dir = comp
+            r_b_flat = r_b[b_dir].reshape(dim_bse)
+
+            if a_dir == 'z':
+                integrand_ipa = delta_z.reshape(dim_bse) * np.abs(r_b_flat)**2
+                integrand_ipa = np.real(integrand_ipa)
+            else:
+                r_deriv_flat = r_deriv[(a_dir, b_dir)].reshape(dim_bse)
+                integrand_ipa = -np.imag(r_b_flat.conj() * r_deriv_flat)
+
+            diff = omegas[:, None] - dE.reshape(dim_bse)[None, :]
+            lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+            ipa_results[comp] = lorentz @ integrand_ipa / Nk * prefactor
+
+    # ----------------------------------------------------------------
+    # Plotting — all components on a single figure
+    # ----------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(10, 7))
+    color_cycle = ['#e41a1c', '#e41a1c', '#377eb8', '#377eb8', '#4daf4a', '#4daf4a']
+    ls_cycle = ['-', '--', '-', '--', '-', '--']
+    labels_map = {('x', 'x', 'x'): r'$\sigma^{xxx}$',
+                  ('x', 'y', 'y'): r'$\sigma^{xyy}$',
+                  ('y', 'x', 'x'): r'$\sigma^{yxx}$',
+                  ('y', 'y', 'y'): r'$\sigma^{yyy}$',
+                  ('z', 'x', 'x'): r'$\sigma^{zxx}$',
+                  ('z', 'y', 'y'): r'$\sigma^{zyy}$'}
+
+    for idx, comp in enumerate(comp_list):
+        col = color_cycle[idx]
+        ls = ls_cycle[idx]
+        lbl = labels_map[comp]
+        ax.plot(omegas, results[comp], color=col, ls=ls, lw=2, label=lbl)
+        if ipa_results is not None:
+            ax.plot(omegas, ipa_results[comp], color=col, ls=':', lw=1.2,
+                    alpha=0.5)
+
+    ax.axhline(0, color='k', lw=0.5, ls='--')
+    ax.set_xlabel('Photon Energy (eV)')
+    ax.set_ylabel(r'Shift Conductivity ($\mu$A/V$^2$)')
+    ax.set_title(f'BSE Shift Current\n'
+                 f'N={N_top}/{N_bottom}, twist={np.degrees(twist_angle):.0f}°, '
+                 f'kappa={kappa}, r0={r0} A, d={thickness} A, '
+                 f'grid={n_k_bse}²', fontsize=11)
+    ax.legend(fontsize=8, ncol=2)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(E_range)
+    plt.tight_layout()
+    fname = f"EM_bse_sc{save_prefix}.png"
+    plt.savefig(fname, dpi=300)
+    plt.close()
+    print(f"\nSaved BSE Shift Current Figure: {fname}")
+
+    # Save spectral data
+    spec_cols = [omegas]
+    spec_header = ["omega_eV"]
+    for comp in comp_list:
+        a_dir, b_dir, c_dir = comp
+        spec_cols.append(results[comp])
+        spec_header.append(f"BSE_sigma_{a_dir}{b_dir}{c_dir}_uA_per_V2")
+    if ipa_results is not None:
+        for comp in comp_list:
+            a_dir, b_dir, c_dir = comp
+            spec_cols.append(ipa_results[comp])
+            spec_header.append(f"IPA_sigma_{a_dir}{b_dir}{c_dir}_uA_per_V2")
+    _save_dat(
+        f"EM_bse_sc{save_prefix}.dat",
+        np.column_stack(spec_cols),
+        " ".join(spec_header)
+    )
+
+    # ----------------------------------------------------------------
+    # Exciton analysis plot (skip if no excitons in range)
+    # ----------------------------------------------------------------
+    in_range = (Omega_S >= E_range[0]) & (Omega_S <= E_range[1])
+    if np.any(in_range):
+        osc_x = np.abs(A_coeff.conj().T @ r_b['x'].reshape(dim_bse))**2
+        osc_y = np.abs(A_coeff.conj().T @ r_b['y'].reshape(dim_bse))**2
+        osc_data = {'x': osc_x, 'y': osc_y}
+
+        r_deriv_xx_flat = r_deriv[('x', 'x')].reshape(dim_bse)
+        r_deriv_yy_flat = r_deriv[('y', 'y')].reshape(dim_bse)
+        d_x_S = A_coeff.conj().T @ r_b['x'].reshape(dim_bse)
+        d_y_S = A_coeff.conj().T @ r_b['y'].reshape(dim_bse)
+        g_xx_S = A_coeff.conj().T @ r_deriv_xx_flat
+        g_yy_S = A_coeff.conj().T @ r_deriv_yy_flat
+        shift_weight_data = {
+            'x': -np.imag(d_x_S * g_xx_S.conj()),
+            'y': -np.imag(d_y_S * g_yy_S.conj()),
+        }
+
+        plot_exciton_analysis(Omega_S, osc_data, shift_weight_data,
+                              E_range=E_range,
+                              N_top=N_top, N_bottom=N_bottom,
+                              twist_angle=twist_angle,
+                              kappa=kappa, r0=r0, thickness=thickness,
+                              save_prefix=f"{save_prefix}_inplane")
 
     return omegas, results, Omega_S, A_coeff
 
@@ -3318,15 +3632,73 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
 
     # 11. Plotting
     plt.figure(figsize=(5, 5))
-    plt.plot(level_list, X_bright, label='X-bright (analytic)', color='red', ls='--')
-    plt.plot(level_list, Y_bright, label='Y-bright (analytic)', color='blue', ls='--')
-    plt.scatter(range(N_bottom[0], N_bottom[1]+1), bright_level[:, 1], label='Y-bright (BSE)', color='blue', marker='s')
-    plt.scatter(range(N_bottom[0], N_bottom[1]+1), bright_level[:, 0], label='X-bright (BSE)', color='red', marker='o')
+    if N_top == 2:
+        plt.plot([3,4,5,6],[0.63728, 0.55506, 0.49826, 0.45858],
+                linestyle='None',marker='*', markersize=10, 
+                markeredgewidth=1.0,
+                markerfacecolor='white',markeredgecolor='lightcoral',
+                label=r'X-bright (Exp.)')
+        plt.plot([3,4,5,6],[0.80791, 0.80593, 0.80407, 0.78658],
+                linestyle='None',marker='*', markersize=10, 
+                markeredgewidth=1.0,
+                markerfacecolor='white',markeredgecolor='royalblue',
+                label=r'Y-bright (Exp.)')
+    elif N_top == 3:
+        plt.plot([3,4,5,6,7],[0.58383,0.49814,0.46267,0.41902,0.41307],
+                linestyle='None',marker='*', markersize=10, 
+                markeredgewidth=1.0,
+                markerfacecolor='white',markeredgecolor='lightcoral',
+                label=r'X-bright (Exp.)')
+        plt.plot([3,4,5,6,7],[0.60913,0.58408,0.57478,0.5775,0.56734],
+                linestyle='None',marker='*', markersize=10, 
+                markeredgewidth=1.0,
+                markerfacecolor='white',markeredgecolor='royalblue',
+                label=r'Y-bright (Exp.)')
+    elif N_top == 4:
+        plt.plot([4,5,6,7],[0.50347, 0.47966, 0.41952, 0.39559],
+                linestyle='None',marker='*', markersize=10, 
+                markeredgewidth=1.0,
+                markerfacecolor='white',markeredgecolor='lightcoral',
+                label=r'X-bright (Exp.)')
+        plt.plot([4,5,6,7],[0.51414, 0.51141, 0.47681, 0.47011],
+                linestyle='None',marker='*', markersize=10, 
+                markeredgewidth=1.0,
+                markerfacecolor='white',markeredgecolor='royalblue',
+                label=r'Y-bright (Exp.)')
+    # line plot
+    plt.plot(level_list, X_bright,
+         linestyle='--', linewidth=1.0, color='red', alpha=0.6,
+        #  label=r'X-bright (analytic)',
+         zorder=0)
+    plt.plot(level_list, Y_bright,
+         linestyle='--', linewidth=1.0, color='blue', alpha=0.6,
+        #  label=r'Y-bright (analytic)',
+         zorder=0)
+    
+    # BSE results
+    plt.plot(range(N_bottom[0], N_bottom[1]+1),bright_level[:, 1],
+            linestyle='None',marker='v', markersize=8, 
+            markerfacecolor='royalblue',
+            markeredgewidth=0.4,
+            markeredgecolor='black',
+            label=r'Y-bright (Calc.)')
+    plt.plot(range(N_bottom[0], N_bottom[1]+1), bright_level[:, 0],
+            linestyle='None',marker='^', markersize=8, 
+            markerfacecolor='lightcoral',
+            markeredgewidth=0.4,
+            markeredgecolor='black',
+            label=r'X-bright (Calc.)')
     # plt.tight_layout()
-    plt.ylim(0.0,1.0)
-    plt.legend()
-    plt.xlabel('$N_{bottom}$')
-    plt.ylabel('Bright Exciton Energy (eV)')
+    if N_top == 3:
+        plt.ylim(0.0,1.0)
+    elif N_top == 2:
+        plt.ylim(0.0,1.2)
+    elif N_top == 4:
+        plt.ylim(0.2,0.8)
+    plt.tick_params(which='both', direction='in', labelsize=11)
+    plt.legend(frameon=False)
+    plt.xlabel('Layer number (N)')
+    plt.ylabel('Exciton Energy (eV)')
     fname = f"EM_exciton_level.png"
     plt.savefig(fname, dpi=300)
     plt.close()
@@ -3346,6 +3718,144 @@ def plot_exciton_level(N_top=1, N_bottom=[2,7], twist_angle=0.0,
         "N_bottom_continuous X_bright_analytic_eV Y_bright_analytic_eV"
     )
 
+
+def lifetime():
+    # =========================================================================
+    # 1. Fundamental Physical Constants (SI Units)
+    # =========================================================================
+    epsilon_0 = 8.8541878128e-12  # Vacuum permittivity, F/m
+    c = 299792458                 # Speed of light, m/s
+    hbar = 1.054571817e-34        # Reduced Planck constant, J·s
+    e = 1.602176634e-19           # Elementary charge, C
+    m0 = 9.1093837015e-31         # Electron rest mass, kg
+    kb = 1.380649e-23             # Boltzmann constant, J/K
+
+    # =========================================================================
+    # 2. Input Parameters from BSE Calculations
+    # =========================================================================
+    # Supercell area A: 143.7 Angstrom^2 -> Convert to m^2
+    A = 143.7 * (1e-10) ** 2  
+    
+    # Exciton transition energy Es: 0.6208 eV -> Convert to Joules
+    Es_eV = 0.6208
+    Es = Es_eV * e            
+    
+    # Exciton total effective mass M: 0.50 m0 -> Convert to kg
+    M = 0.48 * m0            
+    
+    # Temperature T: 300 K
+    T = 300.0
+    
+    # Raw unnormalized square modulus of the transition dipole (Angstrom^2)
+    raw_mu_squared = 68.74906 ** 2
+    
+    # Number of 2D k-points employed in the calculation
+    Nk = 101 * 101
+    
+    # Normalize by the number of unit cells (Nk) according to the BSE definition
+    mu_S_squared_ang = raw_mu_squared / Nk
+    
+    # Convert normalized transition dipole square from Angstrom^2 to m^2
+    mu_S_squared = mu_S_squared_ang * (1e-10) ** 2
+
+    # =========================================================================
+    # 3. Calculation of Intrinsic Radiative Lifetime at 0 K: tau_S(0)
+    # =========================================================================
+    # Formula: tau_S(0) = (epsilon_0 * c * A * hbar^2) / (e^2 * mu_S^2 * Es)
+    numerator_0K = epsilon_0 * c * A * (hbar ** 2)
+    denominator_0K = (e ** 2) * mu_S_squared * Es
+    
+    tau_0K = numerator_0K / denominator_0K
+
+    # =========================================================================
+    # 4. Thermal Correction for Finite Temperature (300 K)
+    # =========================================================================
+    # Formula: Factor = (3 / 4) * (2 * M * c^2 / Es^2) * kb * T
+    kbT = kb * T
+    factor = 0.75 * ((2 * M * (c ** 2)) / (Es ** 2)) * kbT
+    
+    # Final radiative lifetime at finite temperature
+    tau_300K = tau_0K * factor
+
+    # =========================================================================
+    # 5. Output Results and Intermediate Coefficients
+    # =========================================================================
+    print("--- Physical Parameters (SI Units) ---")
+    print(f"Supercell Area A:               {A:.6e} m^2")
+    print(f"Exciton Energy Es:              {Es:.6e} J ({Es_eV:.4f} eV)")
+    print(f"Exciton Effective Mass M:       {M:.6e} kg ({M/m0:.3f} m0)")
+    print(f"Normalized Dipole Square μ_s^2: {mu_S_squared:.6e} m^2")
+    print(f"Thermal Energy k_B*T (300K):    {kbT:.6e} J")
+    print("-" * 50)
+    print("--- Intermediate and Final Lifetimes ---")
+    print(f"0 K Numerator:                  {numerator_0K:.6e}")
+    print(f"0 K Denominator:                {denominator_0K:.6e}")
+    print(f"Radiative Lifetime tau_S(0):    {tau_0K:.6e} s ({tau_0K * 1e12:.3f} ps)")
+    print(f"Thermal Scaling Factor:         {factor:.6e}")
+    print(f"Radiative Lifetime tau_S(300):  {tau_300K:.6e} s ({tau_300K * 1e9:.3f} ns)")
+    
+    return tau_300K
+
+
+def plot_current():
+    import matplotlib.patches as mpatches
+    # -------------------------
+    # Data Calculation
+    # -------------------------
+    theta = np.linspace(0, 2 * np.pi, 1000)
+    beta_zxx, beta_zyy = 14.0, -14.0
+    
+    I = beta_zxx * np.sin(theta)**2 + beta_zyy * np.cos(theta)**2
+    I_abs = np.abs(I)
+
+    # -------------------------
+    # Initialize Polar Plot
+    # -------------------------
+    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw={'projection': 'polar'})
+
+    # --- Seamless Filled Lobes with Edges ---
+    # Positive (Red) Lobes
+    ax.fill_between(theta, 0, I_abs, where=(I >= 0), 
+                    color='red',linewidth=0.0, alpha=0.75, interpolate=True)
+    # Negative (Blue) Lobes
+    ax.fill_between(theta, 0, I_abs, where=(I < 0), 
+                    color='blue',linewidth=0.0, alpha=0.75, interpolate=True)
+
+    # -------------------------
+    # Axes and Grid Styling
+    # -------------------------
+    ax.set_theta_zero_location('E')
+    ax.set_theta_direction(1)
+    ax.spines['polar'].set_linewidth(1.3)
+    ax.grid(True, linestyle='--', linewidth=0.75, color='black', alpha=0.35)
+
+    # Angular ticks (Every 45 degrees)
+    angles = np.arange(0, 360, 45)
+    ax.set_thetagrids(angles, labels=[str(a) for a in angles], fontsize=12)
+
+    # Radial ticks & Labels on the left (180 degrees side)
+    ax.set_rlim(0, 16)
+    ax.set_rticks([5, 10, 15])
+    ax.set_rlabel_position(180)  # Move the radial labels to the 180° line (left side)
+    ax.tick_params(axis='y', labelsize=11)
+
+    # Add the "Current (nA)" label on the far left side
+    ax.text(np.deg2rad(189), 20, 'Current (nA)', fontsize=14, rotation=90, ha='center', va='center')
+
+    # -------------------------
+    # Legend and Formula
+    # -------------------------
+    red_patch = mpatches.Patch(color='red', alpha=0.75, label='Positive')
+    blue_patch = mpatches.Patch(color='blue', alpha=0.75, label='Negative')
+    ax.legend(handles=[red_patch, blue_patch], loc='upper right', bbox_to_anchor=(1.15, 1.05), frameon=False, fontsize=13)
+
+    plt.figtext(0.50, 0.04, r'$I = \beta_{zxx}\sin^2\theta + \beta_{zyy}\cos^2\theta$', ha='center', fontsize=18)
+
+    # -------------------------
+    # Save Image
+    # -------------------------
+    plt.savefig("EM_current_theta.png", dpi=400, bbox_inches='tight')
+    plt.close()
 
 if __name__ == "__main__":
 
@@ -3389,6 +3899,12 @@ if __name__ == "__main__":
     # # # --------------------------------------------
     # cal_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
     #           k_fine_steps=200, y_lim=(-0.5,1.0))
+
+    # # Projected Band structure
+    # # # --------------------------------------------
+    # plot_layer_projected_unfolded_bands(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                         k_fine_steps=360, y_lim=(-0.5, 1.0),
+    #                                         lw=2.5, save_prefix="")
 
     # # # 3D Band Structure
     # # # --------------------------------------------
@@ -3461,6 +3977,17 @@ if __name__ == "__main__":
     #                                use_gpu="auto", gpu_dtype="complex64",
     #                                gpu_full_eigh_max_dim=32000,)
 
+    calculate_bse_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+                                    E_range=erange, n_E=400, eta=eta,
+                                    k_range=G_moire/2, n_k_bse=n_k_bse,
+                                    n_val=2, n_cond=n_cond,
+                                    thickness=5.2,
+                                    kappa=kappa, r0=r0,
+                                    plot_ipa_comparison=False,
+                                    band_window=None, save_prefix="",
+                                    use_gpu="auto", gpu_dtype="complex64",
+                                    gpu_full_eigh_max_dim=32000)
+    
     # # # Exciton Oscillator Strength (stem plot)
     # # # --------------------------------------------
     # plot_exciton_oscillator_strength(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
@@ -3511,3 +4038,9 @@ if __name__ == "__main__":
     #     kappa=kappa, r0=r0,
     #     save_prefix="_N2N3"
     # )
+
+    # # Exciton lifetime
+    # # --------------------------------------------
+    # lifetime()
+
+    # plot_current()
