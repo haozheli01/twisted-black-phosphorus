@@ -1,0 +1,1048 @@
+% !TeX program = xelatex
+% Overleaf: Menu -> Compiler -> XeLaTeX is recommended.
+% A pdfLaTeX fallback is included through CJKutf8.
+\documentclass[11pt,a4paper]{article}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[utf8]{inputenc}
+  \usepackage[T1]{fontenc}
+  \usepackage{CJKutf8}
+\else
+  \usepackage[UTF8,fontset=fandol]{ctex}
+\fi
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage[unicode=true,bookmarks=false,colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ket}[1]{\left|#1\right\rangle}
+\newcommand{\bra}[1]{\left\langle#1\right|}
+\newcommand{\mel}[3]{\left\langle #1\,\middle|\,#2\,\middle|\,#3\right\rangle}
+\newcommand{\braket}[2]{\left\langle #1\,\middle|\,#2\right\rangle}
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\Impart}{\operatorname{Im}}
+
+\begin{document}
+\ifPDFTeX
+\begin{CJK}{UTF8}{gbsn}
+\fi
+
+\begin{center}
+{\LARGE\bfseries ref.pdf 中公式的逐步推导笔记\par}
+\vspace{0.8em}
+{\today\par}
+\end{center}
+\vspace{1em}
+
+\section*{阅读导引}
+
+这篇文章的主线是：先回顾独立粒子近似下的 shift current 公式，然后把单粒子带指标
+$(n,m,\bm k)$ 换成多体激子指标 $S$，得到多体 shift vector
+$R^\alpha_{S0}$。进一步把 $R^\alpha_{S0}$ 拆成三部分，其中 Term C 只来自激子包络函数
+$A^S_{vc\bm k}$ 的复相位相干性，因此被解释为 correlated exciton state 的量子多体几何项。
+
+下面按原文编号 Eq.~(1)--Eq.~(17) 推导。为了学习方便，我保留原文主要记号，并补充若干未编号但必要的定义：
+\[
+|S\rangle=\sum_{vc\bm k}A^S_{vc\bm k}\,
+\hat a^\dagger_{c\bm k}\hat a_{v\bm k}|0\rangle,\qquad
+C=\frac{e^3}{\hbar^2V_{\rm crys}}<0,
+\]
+\[
+\hat r^\alpha=\sum_{nm\bm k\bm k'}
+r^\alpha_{nm}(\bm k,\bm k')\,
+\hat a^\dagger_{n\bm k}\hat a_{m\bm k'} .
+\]
+这里 $v,c$ 分别表示价带和导带，$|0\rangle$ 是基态 Slater determinant，$S$ 是 BSE 激子态。
+
+\paragraph{关于 Eq.~(8) 的记号。}
+若采用标准定义 $\Impart z\in\mathbb R$，则
+\[
+\ii z-\ii z^*=-2\,\Impart z.
+\]
+因此 Eq.~(8) 的可计算实数形式应写成下面推导中的形式；这样才能与 Eq.~(10) 的实数结果一致。若照 PDF 文本抽取结果中的 ``$2\ii\Impart$'' 理解，会多出一个 $\ii$。后文以实数形式为准。
+
+\section{独立粒子近似的 shift current：Eq.~(1)--Eq.~(3)}
+
+\subsection*{Eq.~(1): IPA shift current conductivity}
+
+原文公式为
+\begin{equation}
+\sigma^{\alpha,\mathrm{IPA\ shift}}_{\beta\beta}
+=\pi C\sum_{nm\bm k}
+R^\alpha_{nm\bm k}\,
+\left|r^\beta_{nm\bm k}\right|^2
+f_{mn\bm k}\,
+\delta(\omega_{mn\bm k}-\omega).
+\tag{1}
+\end{equation}
+
+推导从长度规范的二阶响应开始。对线偏振光 $E^\beta(\omega)$，直流二阶电流写成
+\[
+J^\alpha(0)=\sigma^\alpha_{\beta\beta}(0;\omega,-\omega)
+E^\beta(\omega)E^\beta(-\omega).
+\]
+独立粒子近似下，多体态退化成单粒子带间跃迁 $m\to n$。吸收一个频率 $\omega$ 的光子要求
+\[
+\omega_{mn\bm k}\equiv \frac{\epsilon_{m\bm k}-\epsilon_{n\bm k}}{\hbar}
+=\omega,
+\]
+这个能量守恒给出 $\delta(\omega_{mn\bm k}-\omega)$。
+
+长度规范中，带间偶极矩阵元为
+\[
+r^\beta_{nm\bm k}
+=\mel{u_{n\bm k}}{\ii\partial_{k_\beta}}{u_{m\bm k}},
+\qquad n\ne m,
+\]
+其相位写作
+\[
+r^\beta_{nm\bm k}
+=\left|r^\beta_{nm\bm k}\right|
+\ee^{-\ii\phi_{nm\bm k}}.
+\]
+二阶响应的 resonant 部分可整理成
+\[
+\sigma^\alpha_{\beta\beta}
+=\pi C
+\sum_{nm\bm k}
+f_{mn\bm k}
+\left[-\Impart\left\{(r^\beta_{nm\bm k})^*
+D_\alpha r^\beta_{nm\bm k}\right\}\right]
+\delta(\omega_{mn\bm k}-\omega),
+\]
+其中协变导数为
+\[
+D_\alpha r^\beta_{nm}
+=\partial_{k_\alpha}r^\beta_{nm}
+-\ii(\xi^\alpha_{nn}-\xi^\alpha_{mm})r^\beta_{nm}.
+\]
+代入 $r=|r|\ee^{-\ii\phi}$：
+\[
+\partial_{k_\alpha}r
+=\ee^{-\ii\phi}\left(\partial_{k_\alpha}|r|
+-\ii |r|\partial_{k_\alpha}\phi\right),
+\]
+\[
+(r)^*D_\alpha r
+=|r|\left(\partial_{k_\alpha}|r|
+-\ii |r|\partial_{k_\alpha}\phi
+-\ii(\xi^\alpha_{nn}-\xi^\alpha_{mm})|r|\right).
+\]
+取虚部：
+\[
+-\Impart\{r^*D_\alpha r\}
+=|r|^2
+\left(\xi^\alpha_{nn}-\xi^\alpha_{mm}
++\partial_{k_\alpha}\phi\right)
+=|r|^2R^\alpha_{nm}.
+\]
+代回二阶响应即得 Eq.~(1)。物理上，$\left|r^\beta_{nm}\right|^2$ 是光吸收强度，
+$f_{mn}$ 选择从占据态到空态的跃迁，$R^\alpha_{nm}$ 是每次光激发造成的实空间电荷中心位移。
+
+\subsection*{Eq.~(2): IPA shift vector}
+
+原文定义为
+\begin{equation}
+R^\alpha_{nm\bm k}
+=\xi^\alpha_{nn\bm k}-\xi^\alpha_{mm\bm k}
++\frac{\partial\phi_{nm\bm k}}{\partial k^\alpha}.
+\tag{2}
+\end{equation}
+
+这个组合来自上一节的协变导数。它的关键不是单独每一项，而是整体规范不变性。
+对 Bloch 周期部分作规范变换
+\[
+|u_{n\bm k}\rangle\rightarrow
+\ee^{-\ii\theta_{n\bm k}}|u_{n\bm k}\rangle,
+\]
+Berry connection
+\[
+\xi^\alpha_{nn\bm k}
+=\ii\langle u_{n\bm k}|\partial_{k_\alpha}u_{n\bm k}\rangle
+\]
+变为
+\[
+\xi^{\alpha\prime}_{nn}
+=\xi^\alpha_{nn}+\partial_{k_\alpha}\theta_n.
+\]
+偶极矩阵元变为
+\[
+r^{\beta\prime}_{nm}
+=\ee^{\ii(\theta_n-\theta_m)}r^\beta_{nm}.
+\]
+由于 $r^\beta_{nm}=|r^\beta_{nm}|\ee^{-\ii\phi_{nm}}$，相位变换为
+\[
+\phi'_{nm}
+=\phi_{nm}-\theta_n+\theta_m.
+\]
+于是
+\[
+\xi'_{nn}-\xi'_{mm}+\partial_\alpha\phi'_{nm}
+=\xi_{nn}-\xi_{mm}+\partial_\alpha\phi_{nm}.
+\]
+所以 $R^\alpha_{nm}$ 是可观测的、规范不变的位移量。
+
+\subsection*{Eq.~(3): Bloch 表象中的位置算符}
+
+原文公式为
+\begin{equation}
+\langle n\bm k|\hat{\bm r}|m\bm k'\rangle
+=\bm \xi_{nm\bm k}\delta(\bm k-\bm k')
++\delta_{nm}\,\ii\nabla_{\bm k}\delta(\bm k-\bm k').
+\tag{3}
+\end{equation}
+
+取 Bloch 态
+\[
+\psi_{n\bm k}(\bm r)=\ee^{\ii\bm k\cdot\bm r}u_{n\bm k}(\bm r).
+\]
+位置算符作用在平面波因子上可用
+\[
+\bm r\,\ee^{\ii\bm k'\cdot\bm r}
+=-\ii\nabla_{\bm k'}\ee^{\ii\bm k'\cdot\bm r}
+\]
+表示。矩阵元为
+\[
+\langle n\bm k|\hat{\bm r}|m\bm k'\rangle
+=\int \dd \bm r\,
+u^*_{n\bm k}\ee^{-\ii\bm k\cdot\bm r}\,
+\bm r\,\ee^{\ii\bm k'\cdot\bm r}u_{m\bm k'}.
+\]
+把 $\bm r$ 分成对平面波的导数和对周期部分的导数，经过分部积分得到两项：
+\[
+\delta_{nm}\,\ii\nabla_{\bm k}\delta(\bm k-\bm k')
+\]
+来自正交归一的平面波部分；
+\[
+\bm \xi_{nm\bm k}\delta(\bm k-\bm k'),
+\qquad
+\bm\xi_{nm\bm k}
+=\ii\langle u_{n\bm k}|\nabla_{\bm k}u_{m\bm k}\rangle
+\]
+来自周期函数随 $\bm k$ 的变化。对角元 $\xi_{nn}$ 就是 Berry connection。
+
+\section{BSE 激子态和多体 shift current：Eq.~(4)--Eq.~(7)}
+
+\subsection*{Eq.~(4): Tamm-Dancoff 近似下的 BSE}
+
+原文公式为
+\begin{equation}
+(\epsilon_{c\bm k}-\epsilon_{v\bm k})A^S_{vc\bm k}
++\sum_{v'c'\bm k'}
+K^{eh}_{vc\bm k,v'c'\bm k'}A^S_{v'c'\bm k'}
+=(E_S-E_0)A^S_{vc\bm k}.
+\tag{4}
+\end{equation}
+
+从激子产生算符出发：
+\[
+\hat Q^\dagger_S
+=\sum_{vc\bm k}A^S_{vc\bm k}
+\hat a^\dagger_{c\bm k}\hat a_{v\bm k},
+\qquad
+|S\rangle=\hat Q^\dagger_S|0\rangle.
+\]
+Tamm-Dancoff 近似只保留共振的电子--空穴激发
+$\hat a^\dagger_c\hat a_v$，忽略反共振块
+$\hat a^\dagger_v\hat a_c$。令
+\[
+\hat H=\hat H_{\rm qp}+\hat K^{eh},
+\]
+其中
+\[
+\hat H_{\rm qp}
+=\sum_{n\bm k}\epsilon_{n\bm k}
+\hat a^\dagger_{n\bm k}\hat a_{n\bm k}.
+\]
+把薛定谔方程投影到基
+\[
+|vc\bm k\rangle
+=\hat a^\dagger_{c\bm k}\hat a_{v\bm k}|0\rangle
+\]
+上：
+\[
+\langle vc\bm k|\hat H|S\rangle
+=E_S\langle vc\bm k|S\rangle.
+\]
+非相互作用部分给出电子--空穴能量差：
+\[
+\langle vc\bm k|\hat H_{\rm qp}|S\rangle
+=E_0A^S_{vc\bm k}
++(\epsilon_{c\bm k}-\epsilon_{v\bm k})A^S_{vc\bm k}.
+\]
+电子--空穴库仑核混合不同的 $(v,c,\bm k)$ 跃迁：
+\[
+\langle vc\bm k|\hat K^{eh}|S\rangle
+=\sum_{v'c'\bm k'}
+K^{eh}_{vc\bm k,v'c'\bm k'}A^S_{v'c'\bm k'}.
+\]
+移去基态能量 $E_0$ 后得到 Eq.~(4)。归一化通常取
+\[
+\sum_{vc\bm k}|A^S_{vc\bm k}|^2=1.
+\]
+
+\subsection*{Eq.~(5): 多体 shift current}
+
+原文公式为
+\begin{equation}
+\sigma^{\alpha,\mathrm{shift}}_{\beta\beta}
+=\pi C\sum_S
+R^\alpha_{S0}\left|r^\beta_{0S}\right|^2
+\delta(\Omega_S-\Omega_0-\omega).
+\tag{5}
+\end{equation}
+
+它是 Eq.~(1) 的多体本征态版本。独立粒子近似中的一个带间跃迁
+$(m\to n,\bm k)$ 被替换为一个多体激子跃迁
+\[
+|0\rangle\rightarrow |S\rangle.
+\]
+因此有三处替换：
+\[
+\omega_{mn\bm k}\rightarrow \Omega_S-\Omega_0,\qquad
+r^\beta_{nm\bm k}\rightarrow r^\beta_{0S},\qquad
+R^\alpha_{nm\bm k}\rightarrow R^\alpha_{S0}.
+\]
+吸收条件给出
+\[
+\delta(\Omega_S-\Omega_0-\omega),
+\]
+而跃迁强度为
+\[
+|r^\beta_{0S}|^2
+=\left|\langle 0|\hat r^\beta|S\rangle\right|^2.
+\]
+所以 Eq.~(5) 表示：光把系统从基态激发到激子态 $S$，每个激发贡献一个多体位移
+$R^\alpha_{S0}$，再按振子强度和能量守恒加权求和。
+
+\subsection*{Eq.~(6): 多体 shift vector 的定义}
+
+原文公式为
+\begin{equation}
+R^\alpha_{S0}
+=\langle S|\hat r^\alpha|S\rangle
+-\langle 0|\hat r^\alpha|0\rangle.
+\tag{6}
+\end{equation}
+
+独立粒子图像中，shift vector 是光激发后电荷中心相对激发前的位移。多体态中最直接的推广就是比较激子态和基态的位置期望值：
+\[
+\Delta r^\alpha
+=r^\alpha_{\rm excited}-r^\alpha_{\rm ground}.
+\]
+于是得到 Eq.~(6)。这个定义只涉及初态和末态本身，与入射光偏振方向 $\beta$ 无关；$\beta$ 只通过 $|r^\beta_{0S}|^2$ 决定哪一个激子被强烈激发。
+
+\subsection*{Eq.~(7): 用激子包络函数计算 $R^\alpha_{S0}$}
+
+原文公式为
+\begin{align}
+R^\alpha_{S0}
+&=\langle S|\hat r^\alpha|S\rangle
+-\langle 0|\hat r^\alpha|0\rangle
+\notag\\
+&=
+\sum_{vcv'c'\bm k}
+\left(
+A^{S*}_{vc'\bm k}A^S_{vc\bm k}\xi^\alpha_{c'c\bm k}
+-A^{S*}_{v'c\bm k}A^S_{vc\bm k}\xi^\alpha_{vv'\bm k}
+\right)
+\notag\\
+&\quad
++\sum_{vc\bm k}
+\left(
+\ii A^{S*}_{vc\bm k}
+\frac{\partial A^S_{vc\bm k}}{\partial k^\alpha_v}
+-\ii A^S_{vc\bm k}
+\frac{\partial A^{S*}_{vc\bm k}}{\partial k^\alpha_c}
+\right).
+\tag{7}
+\end{align}
+
+推导核心是把位置算符 Eq.~(3) 放进激子态期望值。
+激子态相对于基态多了一个导带电子，同时少了一个价带电子。对应的一体密度矩阵变化可写成两块：
+\[
+\Delta\rho^{(e)}_{c'c}(\bm k)
+=\sum_v A^{S*}_{vc'\bm k}A^S_{vc\bm k},
+\]
+\[
+\Delta\rho^{(h)}_{vv'}(\bm k)
+=-\sum_c A^{S*}_{v'c\bm k}A^S_{vc\bm k}.
+\]
+负号来自空穴：移走一个价带电子等价于加入一个正电荷空穴。
+
+先看 Eq.~(3) 中的 Berry connection 项
+$\xi_{nm}\delta(\bm k-\bm k')$。导带电子贡献
+\[
+\sum_{vcc'\bm k}
+A^{S*}_{vc'\bm k}A^S_{vc\bm k}
+\xi^\alpha_{c'c\bm k},
+\]
+价带空穴贡献
+\[
+-\sum_{vv'c\bm k}
+A^{S*}_{v'c\bm k}A^S_{vc\bm k}
+\xi^\alpha_{vv'\bm k}.
+\]
+这就是 Eq.~(7) 第一行的大求和。
+
+再看 Eq.~(3) 中的
+$\ii\nabla_{\bm k}\delta(\bm k-\bm k')$。它作用到包络函数的 $\bm k$ 依赖上。
+把电子和空穴动量暂时区分为 $\bm k_c,\bm k_v$，导数项给出
+\[
+\sum_{vc\bm k}
+\ii A^{S*}_{vc\bm k}
+\frac{\partial A^S_{vc\bm k}}{\partial k^\alpha_v},
+\]
+以及空穴部分经分部积分后给出
+\[
+-\sum_{vc\bm k}
+\ii A^S_{vc\bm k}
+\frac{\partial A^{S*}_{vc\bm k}}{\partial k^\alpha_c}.
+\]
+两者相加就是 Eq.~(7) 的第二行。这个第二行正是多体几何项的来源：它只在
+$A^S_{vc\bm k}$ 有非平庸复相位纹理时显著。
+
+\section{激子包络函数的 Berry 相位类比：Eq.~(8)--Eq.~(10)}
+
+\subsection*{Eq.~(8): 相邻 $\bm k$ 点上的包络函数相位差}
+
+在只考虑 momentum-direct optical transitions 时，$\bm k_v=\bm k_c=\bm k$。Eq.~(7) 的第二个求和变为
+\begin{align}
+G^\alpha_S
+&\equiv
+\sum_{vc\bm k}
+\left(
+\ii A^{S*}_{vc\bm k}
+\frac{\partial A^S_{vc\bm k}}{\partial k^\alpha}
+-\ii A^S_{vc\bm k}
+\frac{\partial A^{S*}_{vc\bm k}}{\partial k^\alpha}
+\right)
+\notag\\
+&=
+-2\sum_{vc\bm k}
+\Impart\left[
+A^{S*}_{vc\bm k}
+\frac{\partial A^S_{vc\bm k}}{\partial k^\alpha}
+\right]
+\notag\\
+&=
+-\frac{2}{\delta k^\alpha}
+\sum_{vc\bm k}
+\left|A^S_{vc\bm k}\right|^2
+\Impart\left[
+\ln\left(
+\widetilde A^{S*}_{vc\bm k}
+\widetilde A^S_{vc,\bm k+\delta k^\alpha}
+\right)
+\right].
+\tag{8}
+\end{align}
+这里
+\[
+\widetilde A^S_{vc\bm k}
+=\frac{A^S_{vc\bm k}}{|A^S_{vc\bm k}|}.
+\]
+
+逐步推导如下。记
+\[
+z=A^{S*}_{vc\bm k}\partial_\alpha A^S_{vc\bm k}.
+\]
+则
+\[
+\ii z-\ii z^*
+=\ii(z-z^*)
+=\ii(2\ii\,\Impart z)
+=-2\Impart z.
+\]
+这给出第二行。再用有限差分
+\[
+\partial_\alpha A_{\bm k}
+\simeq
+\frac{A_{\bm k+\delta k^\alpha}-A_{\bm k}}{\delta k^\alpha}.
+\]
+只保留相位变化对虚部的贡献：
+\[
+\Impart\left(A^*_{\bm k}\partial_\alpha A_{\bm k}\right)
+\simeq
+\frac{|A_{\bm k}|^2}{\delta k^\alpha}
+\Impart\left(
+\widetilde A^*_{\bm k}
+\widetilde A_{\bm k+\delta k^\alpha}
+\right).
+\]
+为了得到规范更稳定的相位，使用
+\[
+\arg z=\Impart\ln z,
+\]
+于是
+\[
+\Impart\left(
+\widetilde A^*_{\bm k}
+\widetilde A_{\bm k+\delta k^\alpha}
+\right)
+\longrightarrow
+\Impart\ln\left(
+\widetilde A^*_{\bm k}
+\widetilde A_{\bm k+\delta k^\alpha}
+\right),
+\]
+得到 Eq.~(8)。这个量就是相邻 $\bm k$ 点处激子包络函数的相位差。
+
+\subsection*{Eq.~(9): Berry connection 的有限差分形式}
+
+原文公式为
+\begin{equation}
+\xi^\alpha_{nn\bm k}
+\equiv
+\ii\langle u_{n\bm k}|\nabla_{\bm k}u_{n\bm k}\rangle
+=\frac{\ii}{\delta k^\alpha}
+\ln\langle u_{n\bm k}|u_{n,\bm k+\delta k^\alpha}\rangle
+=-\frac{1}{\delta k^\alpha}
+\Impart\left[
+\ln\langle u_{n\bm k}|u_{n,\bm k+\delta k^\alpha}\rangle
+\right].
+\tag{9}
+\end{equation}
+
+从 overlap 展开：
+\[
+|u_{n,\bm k+\delta k^\alpha}\rangle
+=|u_{n\bm k}\rangle
++\delta k^\alpha\,\partial_\alpha|u_{n\bm k}\rangle
++O((\delta k^\alpha)^2).
+\]
+因此
+\[
+\langle u_{n\bm k}|u_{n,\bm k+\delta k^\alpha}\rangle
+=1+\delta k^\alpha
+\langle u_{n\bm k}|\partial_\alpha u_{n\bm k}\rangle
++O((\delta k^\alpha)^2).
+\]
+取对数：
+\[
+\ln\langle u_{n\bm k}|u_{n,\bm k+\delta k^\alpha}\rangle
+=\delta k^\alpha
+\langle u_{n\bm k}|\partial_\alpha u_{n\bm k}\rangle
++O((\delta k^\alpha)^2).
+\]
+归一化条件 $\langle u|u\rangle=1$ 给出
+\[
+\langle \partial_\alpha u|u\rangle
++\langle u|\partial_\alpha u\rangle=0,
+\]
+所以 $\langle u|\partial_\alpha u\rangle$ 是纯虚数。设
+\[
+\langle u|\partial_\alpha u\rangle=-\ii\xi^\alpha.
+\]
+则
+\[
+\ln\langle u_{\bm k}|u_{\bm k+\delta}\rangle
+=-\ii\,\xi^\alpha\delta k^\alpha,
+\]
+从而
+\[
+\xi^\alpha
+=\frac{\ii}{\delta k^\alpha}
+\ln\langle u_{\bm k}|u_{\bm k+\delta}\rangle
+=-\frac{1}{\delta k^\alpha}
+\Impart\ln\langle u_{\bm k}|u_{\bm k+\delta}\rangle.
+\]
+这说明 Eq.~(8) 的激子包络函数相位差，确实是 Berry connection 的多体类比。
+
+\subsection*{Eq.~(10): 用包络函数相位写几何项}
+
+原文令
+\[
+A^S_{vc\bm k}=|A^S_{vc\bm k}|\ee^{-\ii\Gamma^S_{vc}(\bm k)}.
+\]
+则
+\begin{equation}
+\sum_{vc\bm k}
+\left(
+\ii A^{S*}_{vc\bm k}
+\frac{\partial A^S_{vc\bm k}}{\partial k^\alpha}
+-\ii A^S_{vc\bm k}
+\frac{\partial A^{S*}_{vc\bm k}}{\partial k^\alpha}
+\right)
+=
+2\sum_{vc\bm k}
+\frac{\partial\Gamma^S_{vc}(\bm k)}{\partial k^\alpha}
+\left|A^S_{vc\bm k}\right|^2 .
+\tag{10}
+\end{equation}
+
+直接代入即可。设 $\rho=|A|$，$\Gamma=\Gamma^S_{vc}$：
+\[
+A=\rho\ee^{-\ii\Gamma},\qquad
+A^*=\rho\ee^{\ii\Gamma}.
+\]
+求导：
+\[
+\partial_\alpha A
+=\ee^{-\ii\Gamma}
+\left(\partial_\alpha\rho-\ii\rho\partial_\alpha\Gamma\right),
+\]
+\[
+\partial_\alpha A^*
+=\ee^{\ii\Gamma}
+\left(\partial_\alpha\rho+\ii\rho\partial_\alpha\Gamma\right).
+\]
+于是
+\[
+\ii A^*\partial_\alpha A
+=\ii\rho\partial_\alpha\rho
++\rho^2\partial_\alpha\Gamma,
+\]
+\[
+-\ii A\partial_\alpha A^*
+=-\ii\rho\partial_\alpha\rho
++\rho^2\partial_\alpha\Gamma.
+\]
+振幅导数项 $\pm\ii\rho\partial_\alpha\rho$ 抵消，剩下
+\[
+2\rho^2\partial_\alpha\Gamma
+=2|A|^2\partial_\alpha\Gamma.
+\]
+对 $vc\bm k$ 求和就是 Eq.~(10)。如果 $A$ 可选为连续实函数，则 $\Gamma$ 只能是常数 $0$ 或 $\pi$，这一项消失。
+
+\section{多体 shift vector 的三项分解：Eq.~(11)}
+
+原文公式为
+\begin{align}
+R^\alpha_{S0}
+&=
+\underbrace{
+\sum_{\substack{v\bm k\\ c\ne c'}}
+A^{S*}_{vc'\bm k}A^S_{vc\bm k}\xi^\alpha_{c'c\bm k}
+-
+\sum_{\substack{c\bm k\\ v\ne v'}}
+A^{S*}_{v'c\bm k}A^S_{vc\bm k}\xi^\alpha_{vv'\bm k}
+}_{\text{Term A}}
+\notag\\
+&\quad+
+\underbrace{
+\sum_{vc\bm k}
+|A^S_{vc\bm k}|^2R^\alpha_{cv\bm k}
+}_{\text{Term B}}
+\notag\\
+&\quad+
+\underbrace{
+\sum_{vc\bm k}
+\left(
+\ii A^{S*}_{vc\bm k}\frac{\partial A^S_{vc\bm k}}{\partial k^\alpha_v}
+-\ii A^S_{vc\bm k}\frac{\partial A^{S*}_{vc\bm k}}{\partial k^\alpha_c}
+-|A^S_{vc\bm k}|^2
+\frac{\partial\phi_{cv\bm k}}{\partial k^\alpha}
+\right)
+}_{\text{Term C}} .
+\tag{11}
+\end{align}
+
+从 Eq.~(7) 的第一项开始，把 $c'=c$ 和 $v'=v$ 的对角部分拆出来：
+\[
+\sum_{vcv'c'\bm k}
+A^*_{vc'\bm k}A_{vc\bm k}\xi_{c'c}
+=
+\sum_{\substack{v\bm k\\c'\ne c}}
+A^*_{vc'\bm k}A_{vc\bm k}\xi_{c'c}
++\sum_{vc\bm k}|A_{vc\bm k}|^2\xi_{cc},
+\]
+\[
+-\sum_{vcv'\bm k}
+A^*_{v'c\bm k}A_{vc\bm k}\xi_{vv'}
+=
+-\sum_{\substack{c\bm k\\v'\ne v}}
+A^*_{v'c\bm k}A_{vc\bm k}\xi_{vv'}
+-\sum_{vc\bm k}|A_{vc\bm k}|^2\xi_{vv}.
+\]
+非对角部分组成 Term A。对角部分为
+\[
+\sum_{vc\bm k}|A_{vc\bm k}|^2(\xi^\alpha_{cc}-\xi^\alpha_{vv}).
+\]
+现在加上再减去
+\[
+\sum_{vc\bm k}|A_{vc\bm k}|^2
+\frac{\partial\phi_{cv\bm k}}{\partial k^\alpha}.
+\]
+加上的那部分与 Berry connection 差一起构成 IPA shift vector：
+\[
+R^\alpha_{cv\bm k}
+=\xi^\alpha_{cc\bm k}-\xi^\alpha_{vv\bm k}
++\frac{\partial\phi_{cv\bm k}}{\partial k^\alpha}.
+\]
+所以得到 Term B：
+\[
+\sum_{vc\bm k}|A_{vc\bm k}|^2R^\alpha_{cv\bm k}.
+\]
+被减去的那部分与 Eq.~(7) 的包络函数导数项合并，得到 Term C。
+
+三项的含义是：
+
+Term A：导带或价带流形内部的非对角 Berry connection 混合，IPA 中没有。
+
+Term B：用激子权重平均后的 IPA shift vector。
+
+Term C：激子包络函数相位与偶极相位之间的规范不变组合。
+
+Term C 是论文强调的 quantum many-body geometric term。
+
+\section{实空间解释：Eq.~(12)--Eq.~(14)}
+
+\subsection*{Eq.~(12): 多体位移的电子--空穴坐标形式}
+
+原文公式为
+\begin{equation}
+R^\alpha_{S0}
+=\langle S|r^\alpha|S\rangle-\langle 0|r^\alpha|0\rangle
+=\int \dd\bm r_e\,\dd\bm r_h\,
+\Psi^{S*}(\bm r_e,\bm r_h)
+\left(r^\alpha_e-r^\alpha_h\right)
+\Psi^S(\bm r_e,\bm r_h).
+\tag{12}
+\end{equation}
+
+激子是一个电子和一个空穴的相关态。相对基态而言，激发后的电荷中心变化可写成
+\[
+\Delta r^\alpha
+=\langle r^\alpha_e\rangle-\langle r^\alpha_h\rangle.
+\]
+用二体波函数 $\Psi^S(\bm r_e,\bm r_h)$ 计算期望值：
+\[
+\langle r^\alpha_e-r^\alpha_h\rangle
+=\int \dd\bm r_e\,\dd\bm r_h\,
+|\Psi^S(\bm r_e,\bm r_h)|^2
+(r^\alpha_e-r^\alpha_h),
+\]
+这就是 Eq.~(12)。
+
+\subsection*{Eq.~(13): 激子实空间波函数}
+
+原文公式为
+\begin{equation}
+\Psi^S(\bm r_e,\bm r_h)
+=\sum_{vc\bm k}
+A^S_{vc\bm k}
+\psi^*_{v\bm k}(\bm r_h)
+\psi_{c\bm k}(\bm r_e).
+\tag{13}
+\end{equation}
+
+从二次量子化激子态
+\[
+|S\rangle=\sum_{vc\bm k}A^S_{vc\bm k}
+\hat a^\dagger_{c\bm k}\hat a_{v\bm k}|0\rangle
+\]
+出发，在实空间投影到``电子在 $\bm r_e$、空穴在 $\bm r_h$''的基上。
+导带电子的振幅是 $\psi_{c\bm k}(\bm r_e)$；空穴等价于价带电子的缺失，所以空穴部分带复共轭
+$\psi^*_{v\bm k}(\bm r_h)$。所有可能的价带、导带和动量通道按 BSE 系数
+$A^S_{vc\bm k}$ 相干叠加，即得 Eq.~(13)。
+
+\subsection*{Eq.~(14): 分成胞内项和跨晶胞项}
+
+原文公式为
+\begin{align}
+R^\alpha_{S0}
+&=
+\sum_{vc\bm k}A^{S*}_{vc\bm k}A^S_{vc\bm k}
+\frac{1}{\Omega}
+\int_\Omega \dd\bm r_e\,
+u^*_{c\bm k}r^\alpha_eu_{c\bm k}
+\notag\\
+&\quad
+-
+\sum_{cv\bm k}A^{S*}_{vc\bm k}A^S_{vc\bm k}
+\frac{1}{\Omega}
+\int_\Omega \dd\bm r_h\,
+u^*_{v\bm k}r^\alpha_hu_{v\bm k}
+\notag\\
+&\quad
++\sum_{\bm R}R^\alpha_e
+\int_{\Omega(\bm R_e)}\dd\bm r_e\,\rho^S(\bm r_e)
+-
+\sum_{\bm R}R^\alpha_h
+\int_{\Omega(\bm R_h)}\dd\bm r_h\,\rho^S(\bm r_h).
+\tag{14}
+\end{align}
+其中
+\[
+\rho^S(\bm r_e)=\int \dd\bm r_h\,|\Psi^S(\bm r_e,\bm r_h)|^2,
+\qquad
+\rho^S(\bm r_h)=\int \dd\bm r_e\,|\Psi^S(\bm r_e,\bm r_h)|^2.
+\]
+
+推导时把空间坐标拆成
+\[
+\bm r_e=\bm x_e+\bm R_e,\qquad
+\bm r_h=\bm x_h+\bm R_h,
+\]
+其中 $\bm x_{e,h}\in\Omega$ 是选定原胞内坐标，$\bm R_{e,h}$ 是晶格矢量。
+因此
+\[
+r^\alpha_e-r^\alpha_h
+=(x^\alpha_e-x^\alpha_h)+(R^\alpha_e-R^\alpha_h).
+\]
+把它代入 Eq.~(12) 后自然分成两类贡献。
+
+第一类来自胞内坐标 $x^\alpha_e-x^\alpha_h$。利用 Bloch 波函数
+\[
+\psi_{n\bm k}(\bm r)
+=\ee^{\ii\bm k\cdot\bm r}u_{n\bm k}(\bm r)
+\]
+以及不同能带和不同 $\bm k$ 的正交性，交叉项消失，只剩
+\[
+\sum_{vc\bm k}|A^S_{vc\bm k}|^2
+\frac{1}{\Omega}\int_\Omega \dd\bm r_e\,
+u^*_{c\bm k}x^\alpha_eu_{c\bm k}
+-
+\sum_{vc\bm k}|A^S_{vc\bm k}|^2
+\frac{1}{\Omega}\int_\Omega \dd\bm r_h\,
+u^*_{v\bm k}x^\alpha_hu_{v\bm k}.
+\]
+这对应 Eq.~(14) 的第一行，形式上类似 Term B，即 renormalized IPA shift vector。
+
+第二类来自晶格矢量 $R^\alpha_e-R^\alpha_h$。定义边缘密度
+\[
+\rho^S(\bm r_e)=\int \dd\bm r_h\,|\Psi^S(\bm r_e,\bm r_h)|^2,
+\]
+它表示电子在 $\bm r_e$ 的概率密度，已经对所有空穴位置平均。于是
+\[
+\langle R^\alpha_e\rangle
+=\sum_{\bm R}R^\alpha_e
+\int_{\Omega(\bm R_e)}\dd\bm r_e\,\rho^S(\bm r_e),
+\]
+空穴同理。两者相减就是 Eq.~(14) 第二行。这个跨晶胞项反映激子形成后电子和空穴密度在多个晶胞尺度上的分离，因此可以远大于单胞内位移。
+
+\section{计算方法中的速度规范公式和 sum rule：Eq.~(15)--Eq.~(16)}
+
+\subsection*{Eq.~(15): velocity-gauge shift current expression}
+
+原文公式为
+\begin{align}
+\sigma^{\alpha,\mathrm{shift}}_{\beta\beta}
+&=
+\frac{-\ii C}{m^2\omega^2}
+\sum_{SS'}
+\frac{
+v^\alpha_{0S'}p^\beta_{S'S}p^\beta_{S0}
+}{
+\Omega_0-\Omega_{S'}
+}
+\delta(\Omega_S-\Omega_0-\omega)
+\notag\\
+&\quad
++\frac{\ii C}{m^2\omega^2}
+\sum_{\Omega_S\ne\Omega_{S'}}
+\frac{
+v^\alpha_{S'S}p^\beta_{S0}p^\beta_{0S'}
+}{
+\Omega_{S'}-\Omega_S
+}
+\delta(\Omega_S-\Omega_0-\omega).
+\tag{15}
+\end{align}
+
+这是多体本征态基底中的二阶 Kubo/速度规范表达式。速度规范中光场通过矢势耦合：
+\[
+\hat H_I(t)
+=-\frac{1}{m}\hat p^\beta A^\beta(t),
+\qquad
+A^\beta(\omega)=\frac{E^\beta(\omega)}{\ii\omega}.
+\]
+二阶响应含有两个光场相互作用，所以出现
+\[
+\frac{1}{m^2\omega^2}.
+\]
+在二阶 Kubo 公式中插入完备多体态
+\[
+\sum_S|S\rangle\langle S|=1,
+\]
+并保留吸收共振项 $\Omega_S-\Omega_0=\omega$，得到带有
+\[
+\delta(\Omega_S-\Omega_0-\omega)
+\]
+的表达式。两个求和项对应速度算符 $\hat v^\alpha$ 插入在两种不同的时间排序中；分母
+$\Omega_0-\Omega_{S'}$ 和 $\Omega_{S'}-\Omega_S$ 来自中间虚态传播。
+
+可以检查它与 Eq.~(5) 的结构一致。对非对角矩阵元有
+\[
+v^\alpha_{AB}
+=\ii(\Omega_A-\Omega_B)r^\alpha_{AB}.
+\]
+代入 Eq.~(15)：
+\[
+\frac{v^\alpha_{0S'}}{\Omega_0-\Omega_{S'}}
+=\ii r^\alpha_{0S'},
+\qquad
+\frac{v^\alpha_{S'S}}{\Omega_{S'}-\Omega_S}
+=\ii r^\alpha_{S'S}.
+\]
+于是 Eq.~(15) 中方括号结构化为
+\[
+\frac{C}{m^2\omega^2}
+\sum_S p^\beta_{S0}
+\left[
+\sum_{S'}r^\alpha_{0S'}p^\beta_{S'S}
+-\sum_{S'}p^\beta_{0S'}r^\alpha_{S'S}
+\right]
+\delta(\Omega_S-\Omega_0-\omega).
+\]
+括号正是 Eq.~(16) 的分子。再用共振条件和
+\[
+p^\beta_{S0}
+=m v^\beta_{S0}
+=\ii m(\Omega_S-\Omega_0)r^\beta_{S0}
+\]
+得到
+\[
+\frac{|p^\beta_{0S}|^2}{m^2\omega^2}
+=|r^\beta_{0S}|^2.
+\]
+取吸收部分时，通常由
+\[
+\frac{1}{x-\ii0^+}
+=\mathcal P\frac1x+\ii\pi\delta(x)
+\]
+给出 Eq.~(5) 中的 $\pi$。因此 Eq.~(15) 与 Eq.~(5) 是同一个 shift current 的速度规范和位移规范写法。
+
+\subsection*{Eq.~(16): many-body shift vector 的 sum rule}
+
+原文公式为
+\begin{equation}
+R^\alpha_{S0}
+=\frac{1}{p^\beta_{0S}}
+\left(
+\sum_{S'\ne0}r^\alpha_{0S'}p^\beta_{S'S}
+-
+\sum_{S'\ne S}p^\beta_{0S'}r^\alpha_{S'S}
+\right).
+\tag{16}
+\end{equation}
+
+这个 sum rule 来自对易关系。对 $S\ne0$，常数算符的非对角矩阵元为零，因此
+\[
+\langle0|[\hat r^\alpha,\hat p^\beta]|S\rangle=0
+\]
+在 $\alpha,\beta$ 固定且 $S\ne0$ 的非对角通道成立。插入完备态：
+\[
+0
+=\sum_{S'}r^\alpha_{0S'}p^\beta_{S'S}
+-\sum_{S'}p^\beta_{0S'}r^\alpha_{S'S}.
+\]
+把第一项中 $S'=0$ 的部分和第二项中 $S'=S$ 的部分单独拿出：
+\[
+0
+=r^\alpha_{00}p^\beta_{0S}
++\sum_{S'\ne0}r^\alpha_{0S'}p^\beta_{S'S}
+-\sum_{S'\ne S}p^\beta_{0S'}r^\alpha_{S'S}
+-p^\beta_{0S}r^\alpha_{SS}.
+\]
+整理：
+\[
+(r^\alpha_{SS}-r^\alpha_{00})p^\beta_{0S}
+=
+\sum_{S'\ne0}r^\alpha_{0S'}p^\beta_{S'S}
+-
+\sum_{S'\ne S}p^\beta_{0S'}r^\alpha_{S'S}.
+\]
+由于
+\[
+R^\alpha_{S0}=r^\alpha_{SS}-r^\alpha_{00},
+\]
+两边除以 $p^\beta_{0S}$ 即得 Eq.~(16)。这个公式在数值上有用，因为直接计算位置算符对角元在周期体系里不方便，而非对角的 $r,p$ 矩阵元更容易通过 BSE 态求得。
+
+\section{SHG 中一般 $r^\alpha_{S'S}$ 的分解：Eq.~(17)}
+
+原文公式可显式写为
+\begin{align}
+r^\alpha_{S'S}
+&=
+\underbrace{
+\sum_{\substack{v\bm k\\c\ne c'}}
+A^{S'*}_{vc'\bm k}A^S_{vc\bm k}\xi^\alpha_{c'c\bm k}
+-
+\sum_{\substack{c\bm k\\v\ne v'}}
+A^{S'*}_{v'c\bm k}A^S_{vc\bm k}\xi^\alpha_{vv'\bm k}
+}_{\text{Term A}}
+\notag\\
+&\quad+
+\underbrace{
+\sum_{vc\bm k}
+A^{S'*}_{vc\bm k}A^S_{vc\bm k}
+R^\alpha_{cv\bm k}
+}_{\text{Term B}}
+\notag\\
+&\quad+
+\underbrace{
+\sum_{vc\bm k}
+\left(
+\ii A^{S'*}_{vc\bm k}
+\frac{\partial A^S_{vc\bm k}}{\partial k^\alpha_v}
+-\ii A^S_{vc\bm k}
+\frac{\partial A^{S'*}_{vc\bm k}}{\partial k^\alpha_c}
+-A^{S'*}_{vc\bm k}A^S_{vc\bm k}
+\frac{\partial\phi_{cv\bm k}}{\partial k^\alpha}
+\right)
+}_{\text{Term C}}
++r^\alpha_{00}\delta_{S'S}.
+\tag{17}
+\end{align}
+我在 Term C 前显式写出 $\sum_{vc\bm k}$；这是由 Eq.~(7) 的一般化直接要求的，页面排版中容易和前一项的求和混在一起。
+
+Eq.~(17) 是 Eq.~(11) 从对角矩阵元 $S'=S$ 推广到非对角矩阵元 $S'\ne S$。
+先从
+\[
+r^\alpha_{S'S}
+=\langle S'|\hat r^\alpha|S\rangle
+\]
+出发。若 $S'=S$，它给出激子态的位置期望值；若 $S'\ne S$，它给出两个激子态之间的位置矩阵元，在 SHG 这样的三态非线性过程中会出现。
+
+用
+\[
+|S\rangle=\sum_{vc\bm k}A^S_{vc\bm k}
+\hat a^\dagger_{c\bm k}\hat a_{v\bm k}|0\rangle
+\]
+和 Eq.~(3) 展开，得到与 Eq.~(7) 同样的结构，只是左边的复共轭系数来自 $S'$，右边的系数来自 $S$：
+\[
+A^{S*}A^S\quad\longrightarrow\quad A^{S'*}A^S.
+\]
+因此，非对角导带/价带 Berry connection 混合给出 Term A；对角 Berry connection 加上再减去偶极相位导数，给出
+\[
+\sum_{vc\bm k}A^{S'*}_{vc\bm k}A^S_{vc\bm k}R^\alpha_{cv\bm k}
+\]
+作为 Term B；剩下的包络函数导数和 $-\partial_\alpha\phi$ 组成 Term C。
+
+最后的
+\[
+r^\alpha_{00}\delta_{S'S}
+\]
+来自基态背景。只有 $S'=S$ 时，激子态期望值包含同一个基态位置参考；若 $S'\ne S$，正交性使这一项为零。
+
+\section*{总结}
+
+全文的公式链条可以压缩成三步：
+\[
+\text{IPA:}\quad
+\sigma\sim |r_{nm}|^2
+(\xi_{nn}-\xi_{mm}+\partial_k\phi_{nm}),
+\]
+\[
+\text{BSE:}\quad
+|S\rangle=\sum_{vc\bm k}A^S_{vc\bm k}
+\hat a^\dagger_{c\bm k}\hat a_{v\bm k}|0\rangle,
+\]
+\[
+\text{many-body geometry:}\quad
+R^\alpha_{S0}
+=\text{Term A}+\text{Term B}+\text{Term C}.
+\]
+其中 Term B 是 IPA shift vector 的激子权重平均；Term C 是
+$A^S_{vc\bm k}$ 的复相位在 Brillouin zone 中变化所产生的多体几何项。它可以写成相邻
+$\bm k$ 点的相位差，也可以写成实空间中跨多个晶胞的电子--空穴密度分离。这就是论文所谓
+``quantum geometric advantage of the correlated exciton state'' 的数学来源。
+
+\ifPDFTeX
+\end{CJK}
+\fi
+\end{document}
