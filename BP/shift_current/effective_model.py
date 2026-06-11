@@ -710,7 +710,7 @@ def plot_layer_projected_unfolded_bands(N_top=4, N_bottom=4, twist_angle=0.0,
     valid = norm > 1e-14
     layer_pol[valid] = (top_weight[valid] - bottom_weight[valid]) / norm[valid]
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(4.8, 4.8))
     cmap = plt.get_cmap('bwr')
     color_norm = mpl.colors.Normalize(vmin=-1.0, vmax=1.0)
 
@@ -725,14 +725,15 @@ def plot_layer_projected_unfolded_bands(N_top=4, N_bottom=4, twist_angle=0.0,
 
     for pos in sym_pos:
         ax.axvline(pos, c='gray', ls='-', lw=0.5)
-    ax.axhline(0, c='k', ls='--', lw=0.5, alpha=0.5)
+    ax.axhline(0, c='k', ls='--', lw=0.5, alpha=0.5, zorder=0)
     ax.set_xticks(sym_pos)
-    ax.set_xticklabels(sym_labels)
+    ax.set_xticklabels(sym_labels, fontsize=12)
     ax.set_xlim(k_dist[0], k_dist[-1])
     ax.set_ylim(y_lim)
-    ax.set_ylabel("Energy - VBM (eV)")
-    ax.set_title(f'Layer-Projected Unfolded Bands\n'
-                 f'N={N_top}/{N_bottom}, twist={np.degrees(twist_angle):.0f} deg')
+    ax.set_ylabel("Energy - VBM (eV)", fontsize=12)
+    # ax.set_title(f'Layer-Projected Unfolded Bands\n'
+    #              f'N={N_top}/{N_bottom}, twist={np.degrees(twist_angle):.0f} deg')
+    plt.tick_params(direction='in', labelsize=10)
     ax.grid(True, alpha=0.3)
 
     sm = mpl.cm.ScalarMappable(norm=color_norm, cmap=cmap)
@@ -800,7 +801,7 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
 
     # Folded plot
     if len(folded_k) > 0:
-        plt.figure(figsize=(8, 8))
+        plt.figure(figsize=(4.8, 4.8))
         folded_sym_pos = [0.0, k_boundary, 2*k_boundary]
         folded_sym_labels = [r"$X'$", r'$\Gamma$', r"$Y'$"]
         if folded_is_structured:
@@ -813,7 +814,7 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
                         label='Folded Bands', facecolors='white', edgecolors='red',
                         linewidths=0.5, zorder=0)
         for pos in folded_sym_pos:
-            plt.axvline(pos, c='gray', ls='-', lw=0.5)
+            plt.axvline(pos, c='gray', ls='--', lw=0.5,zorder=0)
 
         # # # Add the DFT data
         # # vasp_dat = np.loadtxt("571.dat")
@@ -834,16 +835,17 @@ def plot_2D_bands(k_dist, unfolded_E, folded_k, folded_E,
         vasp_energies = vasp_energies.reshape(2528,30)
         vasp_energies[2100:,:] += 0.560
 
-        plt.scatter(vasp_kpath, vasp_energies, s=50, color='black', alpha=0.8, label='VASP Bands',
-                    facecolors='white', edgecolors='black', linewidths=1.6, zorder=0)
+        plt.scatter(vasp_kpath, vasp_energies, s=32, color='black', alpha=0.8, label='VASP Bands',
+                    facecolors='white', edgecolors='black', linewidths=1.2, zorder=0)
 
 
-        plt.xticks(folded_sym_pos, folded_sym_labels)
+        plt.xticks(folded_sym_pos, folded_sym_labels, fontsize=10)
+        plt.tick_params(direction='in', labelsize=10)
         plt.ylim(y_lim)
         plt.xlim(0, 2*k_boundary)
-        plt.ylabel("Energy (eV)")
+        plt.ylabel("Energy (eV)",fontsize=12)
         plt.grid(True, alpha=0.3)
-        plt.legend()
+        plt.legend(fontsize=10)
         plt.tight_layout()
         plt.savefig(f"EM_folded_{suffix}.png", dpi=200)
         plt.close()
@@ -2111,6 +2113,192 @@ def _many_body_z_shift_vector(A_coeff, z_eig, v_idx, c_idx, Nk, Nv, Nc):
     return np.real(conduction - valence)
 
 
+def _many_body_inplane_shift_vectors(A_coeff, evecs, v_idx, c_idx, n_k_side, dk):
+    r"""
+    R^x_S0 and R^y_S0 from Eq. (7) of ref.pdf on the BSE k-grid.
+
+    For z, the position operator is an ordinary layer-space matrix.  For x/y,
+    the position operator in a periodic crystal is represented by a Berry
+    connection in k space, so we evaluate the many-body shift vector through
+    finite differences on neighboring k points.
+
+    The direct-transition BSE basis state is
+
+        |v c k> = |u_c(k)>_electron x |u_v(k)>^*_hole .
+
+    Its nearest-neighbor overlap is
+
+        L_S(k,k+dk) =
+            A^*_S(v,c,k) A_S(v',c',k+dk)
+            <u_c,k|u_c',k+dk> <u_v',k+dk|u_v,k>
+
+    with all repeated valence/conduction indices summed.  Expanding this link
+    to first order in dk gives the same ingredients as Eq. (7): the conduction
+    Berry connection, minus the valence Berry connection, plus the k-derivative
+    of the exciton envelope A^S_vck.  Contracting the full link instead of
+    separate band phases keeps the result invariant under k-dependent phase or
+    unitary rotations of the active bands, up to the active-space truncation.
+    """
+    Nk = int(n_k_side) * int(n_k_side)
+    Nv = len(v_idx)
+    Nc = len(c_idx)
+    dim_bse = Nk * Nv * Nc
+    if A_coeff.shape[0] != dim_bse:
+        raise ValueError("A_coeff size is inconsistent with n_k_side.")
+    if n_k_side < 2:
+        raise ValueError("At least two k points per direction are required.")
+    if dk <= 0.0:
+        raise ValueError("dk must be positive.")
+
+    n_exc = A_coeff.shape[1]
+    A = A_coeff.reshape(Nk, Nv, Nc, n_exc)
+    U_c = evecs[:, :, c_idx]
+    U_v = evecs[:, :, v_idx]
+
+    def flat_index(ix, iy):
+        return iy * n_k_side + ix
+
+    def exciton_link(k0, k1):
+        O_c = U_c[k0].conj().T @ U_c[k1]
+        O_h = U_v[k1].conj().T @ U_v[k0]
+        return np.einsum('vcs,pv,cq,pqs->s',
+                         A[k0].conj(), O_h, O_c, A[k1], optimize=True)
+
+    def link_forward(k0, k1):
+        return -np.imag(exciton_link(k0, k1)) / dk
+
+    def link_backward(k0, k1):
+        return np.imag(exciton_link(k0, k1)) / dk
+
+    R = {'x': np.zeros(n_exc, dtype=np.float64),
+         'y': np.zeros(n_exc, dtype=np.float64)}
+
+    for direction in ['x', 'y']:
+        for iy in range(n_k_side):
+            for ix in range(n_k_side):
+                k0 = flat_index(ix, iy)
+
+                if direction == 'x':
+                    has_plus = ix + 1 < n_k_side
+                    has_minus = ix - 1 >= 0
+                    k_plus = flat_index(ix + 1, iy) if has_plus else None
+                    k_minus = flat_index(ix - 1, iy) if has_minus else None
+                else:
+                    has_plus = iy + 1 < n_k_side
+                    has_minus = iy - 1 >= 0
+                    k_plus = flat_index(ix, iy + 1) if has_plus else None
+                    k_minus = flat_index(ix, iy - 1) if has_minus else None
+
+                if has_plus and has_minus:
+                    R[direction] += 0.5 * (
+                        link_forward(k0, k_plus) + link_backward(k0, k_minus)
+                    )
+                elif has_plus:
+                    R[direction] += link_forward(k0, k_plus)
+                elif has_minus:
+                    R[direction] += link_backward(k0, k_minus)
+
+    return R
+
+
+def _ipa_inplane_shift_current_from_pipeline(pipe, omegas, eta):
+    """IPA in-plane shift current on the same active space as a BSE pipeline."""
+    comp_list = [('x', 'x', 'x'), ('x', 'y', 'y'),
+                 ('y', 'x', 'x'), ('y', 'y', 'y')]
+
+    evals = pipe['evals']
+    Nb = pipe['Nb']
+    Nk = pipe['Nk']
+    v_idx = pipe['v_idx']
+    c_idx = pipe['c_idx']
+    A_uc = pipe['A_uc']
+
+    v_map = {'x': pipe['vx_eig'], 'y': pipe['vy_eig']}
+    w_map = {
+        'xx': pipe['w_xx_eig'],
+        'yy': pipe['w_yy_eig'],
+        'xy': pipe['w_xy_eig'],
+        'yx': pipe['w_xy_eig'],
+    }
+
+    eps_denom = 1e-5
+    mid = Nb // 2
+    w_all = evals[:, :, None] - evals[:, None, :]
+    results = {}
+
+    for comp in comp_list:
+        a_dir, b_dir, c_dir = comp
+        v_a = v_map[a_dir]
+        v_b = v_map[b_dir]
+        v_c = v_map[c_dir]
+        w_ac = w_map[a_dir + c_dir]
+        sigma = np.zeros_like(omegas)
+
+        for n in c_idx:
+            f_n = 1.0 if n < mid else 0.0
+            v_c_n_row = v_c[:, n, :]
+            v_a_n_row = v_a[:, n, :]
+            v_a_nn = v_a[:, n, n]
+            v_c_nn = v_c[:, n, n]
+            w_n_all = w_all[:, n, :]
+
+            for m in v_idx:
+                f_m = 1.0 if m < mid else 0.0
+                f_nm = f_n - f_m
+                if f_nm == 0.0:
+                    continue
+
+                w_nm = evals[:, n] - evals[:, m]
+                nonzero = w_nm > eps_denom
+
+                r_b_mn = np.zeros(Nk, dtype=np.complex128)
+                r_b_mn[nonzero] = v_b[nonzero, m, n] / (-1j * w_nm[nonzero])
+
+                termA = np.zeros(Nk, dtype=np.complex128)
+                delta_a = v_a_nn[nonzero] - v_a[nonzero, m, m]
+                delta_c = v_c_nn[nonzero] - v_c[nonzero, m, m]
+                termA[nonzero] = (
+                    v_c[nonzero, n, m] * delta_a
+                    + v_a[nonzero, n, m] * delta_c
+                ) / w_nm[nonzero]
+
+                w_np = w_n_all
+                w_pm = w_all[:, :, m]
+                valid_p = (np.abs(w_np) > eps_denom) & (np.abs(w_pm) > eps_denom)
+                valid_p[:, n] = False
+                valid_p[:, m] = False
+                valid_p &= nonzero[:, None]
+
+                v_a_col_m = v_a[:, :, m]
+                v_c_col_m = v_c[:, :, m]
+                num1 = v_c_n_row * v_a_col_m
+                num2 = v_a_n_row * v_c_col_m
+                termB_contrib = np.zeros((Nk, Nb), dtype=np.complex128)
+                termB_contrib[valid_p] = (
+                    num1[valid_p] / w_pm[valid_p]
+                    - num2[valid_p] / w_np[valid_p]
+                )
+                termB = np.sum(termB_contrib, axis=1)
+
+                termC = -w_ac[:, n, m]
+                K_nm = termA + termB + termC
+                r_deriv = np.zeros(Nk, dtype=np.complex128)
+                r_deriv[nonzero] = K_nm[nonzero] / (-1j * w_nm[nonzero])
+
+                weight = f_nm * np.imag(r_b_mn * r_deriv)
+                diff = omegas[:, None] - w_nm[None, :]
+                lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+                sigma += np.sum(lorentz * weight[None, :], axis=1)
+
+        sigma /= Nk
+        e_charge = 1.602176634e-19
+        hbar = 1.054571817e-34
+        prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6
+        results[comp] = sigma * prefactor
+
+    return results
+
+
 def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                                    E_range=(0.0, 1.0), n_E=400, eta=0.010,
                                    k_range=0.15, n_k_bse=30,
@@ -2302,6 +2490,201 @@ def calculate_bse_z_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
                           N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle,
                           kappa=kappa, r0=r0, thickness=thickness,
                           save_prefix=save_prefix)
+
+    return omegas, results, Omega_S, A_coeff
+
+
+def calculate_bse_inplane_shift_current(N_top=1, N_bottom=1, twist_angle=0.0,
+                                        E_range=(0.0, 1.0), n_E=400, eta=0.010,
+                                        k_range=0.15, n_k_bse=30,
+                                        n_val=2, n_cond=2,
+                                        kappa=2.5, r0=5.0,
+                                        plot_ipa_comparison=True,
+                                        band_window=None, save_prefix="",
+                                        use_gpu="auto", gpu_dtype="complex128",
+                                        gpu_full_eigh_max_dim=32000):
+    r"""
+    Excitonic in-plane shift current via BSE in length gauge.
+
+    Computes the linearly polarized in-plane components
+
+        sigma^{x;xx}, sigma^{x;yy}, sigma^{y;xx}, sigma^{y;yy}
+
+    using Eq. (5) and Eq. (7) of ref.pdf:
+
+        sigma^{a;bb}(omega) = C * sum_S R^a_{S0} |d^b_S|^2
+                              delta(Omega_S - omega)
+
+    where d^b_S is the BSE optical dipole and R^a_{S0} is evaluated from the
+    many-body position expectation value on the BSE k-grid.  Because x and y
+    are periodic directions, R^a_{S0} is calculated with gauge-covariant
+    nearest-neighbor links of both the Bloch functions and the exciton envelope.
+
+    The returned spectra use the same 2D units as calculate_shift_current:
+    microampere * Angstrom / V^2.
+
+    The default BSE dtype is complex128 because symmetry-forbidden in-plane
+    components are obtained by cancellation; complex64 can leave visible
+    numerical residuals even when the exact response is zero.
+    """
+    comp_list = [('x', 'x', 'x'), ('x', 'y', 'y'),
+                 ('y', 'x', 'x'), ('y', 'y', 'y')]
+
+    print("=" * 60)
+    print("BSE Excitonic In-Plane Shift Current Calculation (Effective Model)")
+    print("=" * 60)
+    print(f"  Grid: {n_k_bse}x{n_k_bse} = {n_k_bse**2} k-points")
+    print(f"  Active space: {n_val}v x {n_cond}c")
+    print(f"  BSE dimension: {n_val * n_cond * n_k_bse**2}")
+    print(f"  Keldysh params: kappa={kappa}, r0={r0} A")
+
+    model = TwistedBPModel(N_top=N_top, N_bottom=N_bottom, twist_angle=twist_angle)
+
+    print(f"\n[1-4] Running BSE pipeline...")
+    pipe = _run_bse_pipeline(model, k_range, n_k_bse, n_val, n_cond,
+                             thickness=None, kappa=kappa, r0=r0,
+                             band_window=band_window, use_gpu=use_gpu,
+                             gpu_dtype=gpu_dtype,
+                             gpu_full_eigh_max_dim=gpu_full_eigh_max_dim)
+
+    Nk = pipe['Nk']
+    r_b = pipe['r_b']
+    Omega_S = pipe['Omega_S']
+    A_coeff = pipe['A_coeff']
+    dim_bse = pipe['dim_bse']
+    A_uc = pipe['A_uc']
+
+    omegas = np.linspace(E_range[0], E_range[1], n_E)
+    results = {}
+
+    d_S = {}
+    osc_S = {}
+    for b_dir in ['x', 'y']:
+        r_b_flat = r_b[b_dir].reshape(dim_bse)
+        d_S[b_dir] = A_coeff.conj().T @ r_b_flat
+        osc_S[b_dir] = np.abs(d_S[b_dir])**2
+        print(f"    Lowest exciton optical dipole |d^{b_dir}_0|: {np.abs(d_S[b_dir][0]):.6e}")
+
+    print(f"\n[5] Computing many-body in-plane shift vectors...")
+    R_inplane = _many_body_inplane_shift_vectors(
+        A_coeff, pipe['evecs'], pipe['v_idx'], pipe['c_idx'],
+        n_k_side=n_k_bse, dk=pipe['dk'],
+    )
+    print(f"    Lowest exciton R^x_S0: {R_inplane['x'][0]:.6e} A")
+    print(f"    Lowest exciton R^y_S0: {R_inplane['y'][0]:.6e} A")
+
+    print(f"\n[6] Computing excitonic in-plane shift-current spectra...")
+    diff = omegas[:, None] - Omega_S[None, :]
+    lorentz = (1.0 / np.pi) * eta / (diff**2 + eta**2)
+
+    for comp in comp_list:
+        a_dir, b_dir, c_dir = comp
+        assert b_dir == c_dir, "Only linearly polarized components with b==c are implemented."
+        integrand_S = R_inplane[a_dir] * osc_S[b_dir]
+        sigma = lorentz @ integrand_S / Nk
+        results[comp] = sigma
+        print(f"    sigma^{{{a_dir}{b_dir}{c_dir}}}: "
+              f"sum(R|d|^2)={np.sum(integrand_S):.6e}")
+
+    e_charge = 1.602176634e-19
+    hbar = 1.054571817e-34
+    prefactor = (2 * np.pi * e_charge**2) / (hbar * A_uc) * 1E6
+    for comp in comp_list:
+        results[comp] *= prefactor
+    print("    BSE max |sigma| after prefactor:")
+    for comp in comp_list:
+        a_dir, b_dir, c_dir = comp
+        print(f"      {a_dir}{b_dir}{c_dir}: {np.max(np.abs(results[comp])):.6e} uA*A/V^2")
+
+    ipa_results = None
+    if plot_ipa_comparison:
+        print(f"\n[7] Computing IPA comparison on same active-space grid...")
+        ipa_results = _ipa_inplane_shift_current_from_pipeline(pipe, omegas, eta)
+        print("    IPA max |sigma| on the same grid:")
+        for comp in comp_list:
+            a_dir, b_dir, c_dir = comp
+            print(f"      {a_dir}{b_dir}{c_dir}: {np.max(np.abs(ipa_results[comp])):.6e} uA*A/V^2")
+
+    # Plotting
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9), sharex=True)
+    plot_info = {
+        ('x', 'x', 'x'): (axes[0, 0], r'$\sigma^{xxx}$', 'tab:red'),
+        ('x', 'y', 'y'): (axes[0, 1], r'$\sigma^{xyy}$', 'tab:purple'),
+        ('y', 'x', 'x'): (axes[1, 0], r'$\sigma^{yxx}$', 'tab:green'),
+        ('y', 'y', 'y'): (axes[1, 1], r'$\sigma^{yyy}$', 'tab:blue'),
+    }
+    for comp in comp_list:
+        ax, lbl, col = plot_info[comp]
+        ax.plot(omegas, results[comp], color=col, lw=2, label=f'BSE {lbl}')
+        if ipa_results is not None:
+            ax.plot(omegas, ipa_results[comp], color=col, lw=1.5, ls='--',
+                    alpha=0.6, label=f'IPA {lbl}')
+        ax.axhline(0, color='k', lw=0.5, ls='--')
+        ax.set_ylabel(r'$\mu$A$\cdot$A/V$^2$')
+        ax.set_title(lbl)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(E_range)
+    axes[1, 0].set_xlabel('Photon Energy (eV)')
+    axes[1, 1].set_xlabel('Photon Energy (eV)')
+
+    fig.suptitle(f'Excitonic In-Plane Shift Current (BSE, Length Gauge)\n'
+                 f'N={N_top}/{N_bottom}, twist={np.degrees(twist_angle):.0f} deg, '
+                 f'kappa={kappa}, r0={r0} A, grid={n_k_bse}^2', fontsize=11)
+    plt.tight_layout()
+    fname = f"EM_bse_inplane_sc{save_prefix}.png"
+    plt.savefig(fname, dpi=300)
+    plt.close()
+    print(f"\nSaved BSE In-Plane Shift Current Figure: {fname}")
+
+    spec_cols = [
+        omegas,
+        results[('x', 'x', 'x')],
+        results[('x', 'y', 'y')],
+        results[('y', 'x', 'x')],
+        results[('y', 'y', 'y')],
+    ]
+    spec_header = [
+        "omega_eV",
+        "BSE_sigma_xxx_uA_A_per_V2",
+        "BSE_sigma_xyy_uA_A_per_V2",
+        "BSE_sigma_yxx_uA_A_per_V2",
+        "BSE_sigma_yyy_uA_A_per_V2",
+    ]
+    if ipa_results is not None:
+        spec_cols.extend([
+            ipa_results[('x', 'x', 'x')],
+            ipa_results[('x', 'y', 'y')],
+            ipa_results[('y', 'x', 'x')],
+            ipa_results[('y', 'y', 'y')],
+        ])
+        spec_header.extend([
+            "IPA_sigma_xxx_uA_A_per_V2",
+            "IPA_sigma_xyy_uA_A_per_V2",
+            "IPA_sigma_yxx_uA_A_per_V2",
+            "IPA_sigma_yyy_uA_A_per_V2",
+        ])
+    _save_dat(
+        f"EM_bse_inplane_sc{save_prefix}.dat",
+        np.column_stack(spec_cols),
+        " ".join(spec_header)
+    )
+
+    exciton_cols = [
+        Omega_S,
+        osc_S['x'], osc_S['y'],
+        R_inplane['x'], R_inplane['y'],
+        R_inplane['x'] * osc_S['x'],
+        R_inplane['x'] * osc_S['y'],
+        R_inplane['y'] * osc_S['x'],
+        R_inplane['y'] * osc_S['y'],
+    ]
+    _save_dat(
+        f"EM_bse_inplane_exciton_weights{save_prefix}.dat",
+        np.column_stack(exciton_cols),
+        "exciton_energy_eV osc_x osc_y R_x_A R_y_A "
+        "weight_xxx weight_xyy weight_yxx weight_yyy"
+    )
 
     return omegas, results, Omega_S, A_coeff
 
@@ -3693,14 +4076,22 @@ if __name__ == "__main__":
     #     save_prefix=f"_N{n_top}_{n_bottom}"
     # )
 
-    # # BSE Excitonic Z-Shift Current
-    # # --------------------------------------------
-    calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
-                                   n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
-                                   E_range=erange, k_range=G_moire/2,
-                                   kappa=kappa, r0=r0,eta=eta,
-                                   use_gpu="auto", gpu_dtype="complex64",
-                                   gpu_full_eigh_max_dim=32000,)
+    # # # BSE Excitonic Z-Shift Current
+    # # # --------------------------------------------
+    # calculate_bse_z_shift_current(N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #                                n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
+    #                                E_range=erange, k_range=G_moire/2,
+    #                                kappa=kappa, r0=r0,eta=eta,
+    #                                use_gpu="auto", gpu_dtype="complex64",
+    #                                gpu_full_eigh_max_dim=32000,)
+    
+    # calculate_bse_inplane_shift_current(
+    #     N_top=n_top, N_bottom=n_bottom, twist_angle=twist_angle,
+    #     n_k_bse=n_k_bse, n_val=2, n_cond=n_cond,
+    #     E_range=erange, k_range=G_moire/2,
+    #     kappa=kappa, r0=r0, eta=eta,
+    #     use_gpu="auto", gpu_dtype="complex128",
+    # )
     
     # # # Exciton Oscillator Strength (stem plot)
     # # # --------------------------------------------
